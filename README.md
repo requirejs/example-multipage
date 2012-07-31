@@ -16,7 +16,7 @@ If you are using [volo](https://github.com/volojs/volo):
     volo create projectname requirejs/example-multipage
 
 Otherwise,
-[download latest zipball of master](https://github.com/requirejs/example-multipage/zipball/master)
+[download latest zipball of master](https://github.com/requirejs/example-multipage/zipball/master).
 
 ## Project layout
 
