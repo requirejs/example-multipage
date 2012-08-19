@@ -1,5 +1,5 @@
 /**
- * @license r.js 2.0.2 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
+ * @license r.js 2.0.6 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -20,7 +20,7 @@ var requirejs, require, define;
 
     var fileName, env, fs, vm, path, exec, rhinoContext, dir, nodeRequire,
         nodeDefine, exists, reqMain, loadedOptimizedLib, existsForNode,
-        version = '2.0.2',
+        version = '2.0.6',
         jsSuffixRegExp = /\.js$/,
         commandOption = '',
         useLibLoaded = {},
@@ -105,23 +105,27 @@ var requirejs, require, define;
     }
 
     /** vim: et:ts=4:sw=4:sts=4
- * @license RequireJS 2.0.2 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS 2.0.6 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
-/*jslint regexp: true, nomen: true */
+//Not using strict: uneven strict support in browsers, #392, and causes
+//problems with requirejs.exec()/transpiler plugins that may not be strict.
+/*jslint regexp: true, nomen: true, sloppy: true */
 /*global window, navigator, document, importScripts, jQuery, setTimeout, opera */
 
 
 (function (global) {
-    'use strict';
-
-    var version = '2.0.2',
+    var req, s, head, baseElement, dataMain, src,
+        interactiveScript, currentlyAddingScript, mainScript, subPath,
+        version = '2.0.6',
         commentRegExp = /(\/\*([\s\S]*?)\*\/|([^:]|^)\/\/(.*)$)/mg,
-        cjsRequireRegExp = /require\s*\(\s*["']([^'"\s]+)["']\s*\)/g,
+        cjsRequireRegExp = /[^.]\s*require\s*\(\s*["']([^'"\s]+)["']\s*\)/g,
         jsSuffixRegExp = /\.js$/,
         currDirRegExp = /^\.\//,
-        ostring = Object.prototype.toString,
+        op = Object.prototype,
+        ostring = op.toString,
+        hasOwn = op.hasOwnProperty,
         ap = Array.prototype,
         aps = ap.slice,
         apsp = ap.splice,
@@ -139,9 +143,7 @@ var requirejs, require, define;
         contexts = {},
         cfg = {},
         globalDefQueue = [],
-        useInteractive = false,
-        req, s, head, baseElement, dataMain, src,
-        interactiveScript, currentlyAddingScript, mainScript, subPath;
+        useInteractive = false;
 
     function isFunction(it) {
         return ostring.call(it) === '[object Function]';
@@ -182,7 +184,7 @@ var requirejs, require, define;
     }
 
     function hasProp(obj, prop) {
-        return obj.hasOwnProperty(prop);
+        return hasOwn.call(obj, prop);
     }
 
     /**
@@ -258,7 +260,7 @@ var requirejs, require, define;
             //look up paths relative to the moduleName
             var args = aps.call(arguments, 0), lastArg;
             if (enableBuildCallback &&
-                isFunction((lastArg = args[args.length - 1]))) {
+                    isFunction((lastArg = args[args.length - 1]))) {
                 lastArg.__requireJsBuild = true;
             }
             args.push(relMap);
@@ -275,14 +277,14 @@ var requirejs, require, define;
         ], function (item) {
             var prop = item[1] || item[0];
             req[item[0]] = context ? makeContextModuleFunc(context[prop], relMap) :
-                //If no context, then use default context. Reference from
-                //contexts instead of early binding to default context, so
-                //that during builds, the latest instance of the default
-                //context with its config gets used.
-                function () {
-                    var ctx = contexts[defContextName];
-                    return ctx[prop].apply(ctx, arguments);
-                };
+                    //If no context, then use default context. Reference from
+                    //contexts instead of early binding to default context, so
+                    //that during builds, the latest instance of the default
+                    //context with its config gets used.
+                    function () {
+                        var ctx = contexts[defContextName];
+                        return ctx[prop].apply(ctx, arguments);
+                    };
         });
     }
 
@@ -327,7 +329,9 @@ var requirejs, require, define;
     }
 
     function newContext(contextName) {
-        var config = {
+        var inCheckLoaded, Module, context, handlers,
+            checkLoadedTimeoutId,
+            config = {
                 waitSeconds: 7,
                 baseUrl: './',
                 paths: {},
@@ -345,9 +349,7 @@ var requirejs, require, define;
             //should be executed, by the order they
             //load. Important for consistent cycle resolution
             //behavior.
-            waitAry = [],
-            inCheckLoaded, Module, context, handlers,
-            checkLoadedTimeoutId;
+            waitAry = [];
 
         /**
          * Trims the . and .. from an array of path segments.
@@ -360,7 +362,7 @@ var requirejs, require, define;
          */
         function trimDots(ary) {
             var i, part;
-            for (i = 0; ary[i]; i+= 1) {
+            for (i = 0; ary[i]; i += 1) {
                 part = ary[i];
                 if (part === '.') {
                     ary.splice(i, 1);
@@ -393,11 +395,12 @@ var requirejs, require, define;
          * @returns {String} normalized name
          */
         function normalize(name, baseName, applyMap) {
-            var baseParts = baseName && baseName.split('/'),
+            var pkgName, pkgConfig, mapValue, nameParts, i, j, nameSegment,
+                foundMap, foundI, foundStarMap, starI,
+                baseParts = baseName && baseName.split('/'),
+                normalizedBaseParts = baseParts,
                 map = config.map,
-                starMap = map && map['*'],
-                pkgName, pkgConfig, mapValue, nameParts, i, j, nameSegment,
-                foundMap;
+                starMap = map && map['*'];
 
             //Adjust any relative paths.
             if (name && name.charAt(0) === '.') {
@@ -408,17 +411,17 @@ var requirejs, require, define;
                     if (config.pkgs[baseName]) {
                         //If the baseName is a package name, then just treat it as one
                         //name to concat the name with.
-                        baseParts = [baseName];
+                        normalizedBaseParts = baseParts = [baseName];
                     } else {
                         //Convert baseName to array, and lop off the last part,
                         //so that . matches that 'directory' and not name of the baseName's
                         //module. For instance, baseName of 'one/two/three', maps to
                         //'one/two/three.js', but we want the directory, 'one/two' for
                         //this normalization.
-                        baseParts = baseParts.slice(0, baseParts.length - 1);
+                        normalizedBaseParts = baseParts.slice(0, baseParts.length - 1);
                     }
 
-                    name = baseParts.concat(name.split('/'));
+                    name = normalizedBaseParts.concat(name.split('/'));
                     trimDots(name);
 
                     //Some use of packages may use a . path to reference the
@@ -448,28 +451,41 @@ var requirejs, require, define;
                         for (j = baseParts.length; j > 0; j -= 1) {
                             mapValue = map[baseParts.slice(0, j).join('/')];
 
-                            //baseName segment has  config, find if it has one for
+                            //baseName segment has config, find if it has one for
                             //this name.
                             if (mapValue) {
                                 mapValue = mapValue[nameSegment];
                                 if (mapValue) {
                                     //Match, update name to the new value.
                                     foundMap = mapValue;
+                                    foundI = i;
                                     break;
                                 }
                             }
                         }
                     }
 
-                    if (!foundMap && starMap && starMap[nameSegment]) {
-                        foundMap = starMap[nameSegment];
-                    }
-
                     if (foundMap) {
-                        nameParts.splice(0, i, foundMap);
-                        name = nameParts.join('/');
                         break;
                     }
+
+                    //Check for a star map match, but just hold on to it,
+                    //if there is a shorter segment match later in a matching
+                    //config, then favor over this star map.
+                    if (!foundStarMap && starMap && starMap[nameSegment]) {
+                        foundStarMap = starMap[nameSegment];
+                        starI = i;
+                    }
+                }
+
+                if (!foundMap && foundStarMap) {
+                    foundMap = foundStarMap;
+                    foundI = starI;
+                }
+
+                if (foundMap) {
+                    nameParts.splice(0, foundI, foundMap);
+                    name = nameParts.join('/');
                 }
             }
 
@@ -480,7 +496,7 @@ var requirejs, require, define;
             if (isBrowser) {
                 each(scripts(), function (scriptNode) {
                     if (scriptNode.getAttribute('data-requiremodule') === name &&
-                        scriptNode.getAttribute('data-requirecontext') === context.contextName) {
+                            scriptNode.getAttribute('data-requirecontext') === context.contextName) {
                         scriptNode.parentNode.removeChild(scriptNode);
                         return true;
                     }
@@ -517,13 +533,13 @@ var requirejs, require, define;
          * @returns {Object}
          */
         function makeModuleMap(name, parentModuleMap, isNormalized, applyMap) {
-            var index = name ? name.indexOf('!') : -1,
+            var url, pluginModule, suffix,
+                index = name ? name.indexOf('!') : -1,
                 prefix = null,
                 parentName = parentModuleMap ? parentModuleMap.name : null,
                 originalName = name,
                 isDefine = true,
-                normalizedName = '',
-                url, pluginModule, suffix;
+                normalizedName = '';
 
             //If no name, then it means it is a require call, generate an
             //internal name.
@@ -556,17 +572,7 @@ var requirejs, require, define;
                 } else {
                     //A regular module.
                     normalizedName = normalize(name, parentName, applyMap);
-
-                    //Calculate url for the module, if it has a name.
-                    //Use name here since nameToUrl also calls normalize,
-                    //and for relative names that are outside the baseUrl
-                    //this causes havoc. Was thinking of just removing
-                    //parentModuleMap to avoid extra normalization, but
-                    //normalize() still does a dot removal because of
-                    //issue #142, so just pass in name here and redo
-                    //the normalization. Paths outside baseUrl are just
-                    //messy to support.
-                    url = context.nameToUrl(name, null, parentModuleMap);
+                    url = context.nameToUrl(normalizedName);
                 }
             }
 
@@ -586,8 +592,8 @@ var requirejs, require, define;
                 originalName: originalName,
                 isDefine: isDefine,
                 id: (prefix ?
-                    prefix + '!' + normalizedName :
-                    normalizedName) + suffix
+                        prefix + '!' + normalizedName :
+                        normalizedName) + suffix
             };
         }
 
@@ -607,7 +613,7 @@ var requirejs, require, define;
                 mod = registry[id];
 
             if (hasProp(defined, id) &&
-                (!mod || mod.defineEmitComplete)) {
+                    (!mod || mod.defineEmitComplete)) {
                 if (name === 'defined') {
                     fn(defined[id]);
                 }
@@ -712,7 +718,7 @@ var requirejs, require, define;
             });
         }
 
-        function findCycle(mod, traced) {
+        function findCycle(mod, traced, processed) {
             var id = mod.map.id,
                 depArray = mod.depMaps,
                 foundModule;
@@ -735,27 +741,15 @@ var requirejs, require, define;
                 var depId = depMap.id,
                     depMod = registry[depId];
 
-                if (!depMod) {
+                if (!depMod || processed[depId] ||
+                        !depMod.inited || !depMod.enabled) {
                     return;
                 }
 
-                if (!depMod.inited || !depMod.enabled) {
-                    //Dependency is not inited, so this cannot
-                    //be used to determine a cycle.
-                    foundModule = null;
-                    delete traced[id];
-                    return true;
-                }
-
-                //mixin traced to a new object for each dependency, so that
-                //sibling dependencies in this object to not generate a
-                //false positive match on a cycle. Ideally an Object.create
-                //type of prototype delegation would be used here, but
-                //optimizing for file size vs. execution speed since hopefully
-                //the trees are small for circular dependency scans relative
-                //to the full app perf.
-                return (foundModule = findCycle(depMod, mixin({}, traced)));
+                return (foundModule = findCycle(depMod, traced, processed));
             });
+
+            processed[id] = true;
 
             return foundModule;
         }
@@ -774,7 +768,7 @@ var requirejs, require, define;
 
             traced[id] = mod;
 
-            each(depArray, function(depMap) {
+            each(depArray, function (depMap) {
                 var depId = depMap.id,
                     depMod = registry[depId],
                     value;
@@ -814,13 +808,13 @@ var requirejs, require, define;
         }
 
         function checkLoaded() {
-            var waitInterval = config.waitSeconds * 1000,
+            var map, modId, err, usingPathFallback,
+                waitInterval = config.waitSeconds * 1000,
                 //It is possible to disable the wait interval by using waitSeconds of 0.
                 expired = waitInterval && (context.startTime + waitInterval) < new Date().getTime(),
                 noLoads = [],
                 stillLoading = false,
-                needCycleCheck = true,
-                map, modId, err, usingPathFallback;
+                needCycleCheck = true;
 
             //Do not bother if this call was a result of a cycle break.
             if (inCheckLoaded) {
@@ -879,7 +873,7 @@ var requirejs, require, define;
                         return;
                     }
 
-                    var cycleMod = findCycle(mod, {}),
+                    var cycleMod = findCycle(mod, {}, {}),
                         traced = {};
 
                     if (cycleMod) {
@@ -934,7 +928,7 @@ var requirejs, require, define;
         };
 
         Module.prototype = {
-            init: function(depMaps, factory, errback, options) {
+            init: function (depMaps, factory, errback, options) {
                 options = options || {};
 
                 //Do not do more inits if already done. Can happen if there
@@ -1031,7 +1025,7 @@ var requirejs, require, define;
                 }
             },
 
-            load: function() {
+            load: function () {
                 var url = this.map.url;
 
                 //Regular dependency.
@@ -1052,11 +1046,11 @@ var requirejs, require, define;
                     return;
                 }
 
-                var id = this.map.id,
+                var err, cjsModule,
+                    id = this.map.id,
                     depExports = this.depExports,
                     exports = this.exports,
-                    factory = this.factory,
-                    err, cjsModule;
+                    factory = this.factory;
 
                 if (!this.inited) {
                     this.fetch();
@@ -1089,9 +1083,9 @@ var requirejs, require, define;
                                 //favor a non-undefined return value over exports use.
                                 cjsModule = this.module;
                                 if (cjsModule &&
-                                    cjsModule.exports !== undefined &&
-                                    //Make sure it is not already the exports value
-                                    cjsModule.exports !== this.exports) {
+                                        cjsModule.exports !== undefined &&
+                                        //Make sure it is not already the exports value
+                                        cjsModule.exports !== this.exports) {
                                     exports = cjsModule.exports;
                                 } else if (exports === undefined && this.usingExports) {
                                     //exports already set the defined value.
@@ -1147,15 +1141,15 @@ var requirejs, require, define;
                 }
             },
 
-            callPlugin: function() {
+            callPlugin: function () {
                 var map = this.map,
                     id = map.id,
                     pluginMap = makeModuleMap(map.prefix, null, false, true);
 
                 on(pluginMap, 'defined', bind(this, function (plugin) {
-                    var name = this.map.name,
-                        parentName = this.map.parentMap ? this.map.parentMap.name : null,
-                        load, normalizedMap, normalizedMod;
+                    var load, normalizedMap, normalizedMod,
+                        name = this.map.name,
+                        parentName = this.map.parentMap ? this.map.parentMap.name : null;
 
                     //If current map is not normalized, wait for that
                     //normalized name to load instead of continuing.
@@ -1172,12 +1166,12 @@ var requirejs, require, define;
                                                       false,
                                                       true);
                         on(normalizedMap,
-                           'defined', bind(this, function (value) {
-                            this.init([], function () { return value; }, null, {
-                                enabled: true,
-                                ignore: true
-                            });
-                        }));
+                            'defined', bind(this, function (value) {
+                                this.init([], function () { return value; }, null, {
+                                    enabled: true,
+                                    ignore: true
+                                });
+                            }));
                         normalizedMod = registry[normalizedMap.id];
                         if (normalizedMod) {
                             if (this.events.error) {
@@ -1242,9 +1236,9 @@ var requirejs, require, define;
                     //Use parentName here since the plugin's name is not reliable,
                     //could be some weird string with no path that actually wants to
                     //reference the parentName's path.
-                    plugin.load(map.name, makeRequire(map.parentMap, true, function (deps, cb) {
+                    plugin.load(map.name, makeRequire(map.parentMap, true, function (deps, cb, er) {
                         deps.rjsSkipMap = true;
-                        return context.require(deps, cb);
+                        return context.require(deps, cb, er);
                     }), load, config);
                 }));
 
@@ -1324,7 +1318,7 @@ var requirejs, require, define;
                 this.check();
             },
 
-            on: function(name, cb) {
+            on: function (name, cb) {
                 var cbs = this.events[name];
                 if (!cbs) {
                     cbs = this.events[name] = [];
@@ -1477,7 +1471,12 @@ var requirejs, require, define;
                 //update the maps for them, since their info, like URLs to load,
                 //may have changed.
                 eachProp(registry, function (mod, id) {
-                    mod.map = makeModuleMap(id);
+                    //If module already has init called, since it is too
+                    //late to modify them, and ignore unnormalized ones
+                    //since they are transient.
+                    if (!mod.inited && !mod.map.unnormalized) {
+                        mod.map = makeModuleMap(id);
+                    }
                 });
 
                 //If a deps array or a config callback is specified, then call
@@ -1586,6 +1585,10 @@ var requirejs, require, define;
             },
 
             undef: function (id) {
+                //Bind any waiting define() calls to this context,
+                //fix for #408
+                takeGlobalQueue();
+
                 var map = makeModuleMap(id, null, true),
                     mod = registry[id];
 
@@ -1624,9 +1627,9 @@ var requirejs, require, define;
              * @param {String} moduleName the name of the module to potentially complete.
              */
             completeLoad: function (moduleName) {
-                var shim = config.shim[moduleName] || {},
-                shExports = shim.exports && shim.exports.exports,
-                found, args, mod;
+                var found, args, mod,
+                    shim = config.shim[moduleName] || {},
+                    shExports = shim.exports && shim.exports.exports;
 
                 takeGlobalQueue();
 
@@ -1653,9 +1656,7 @@ var requirejs, require, define;
                 //of those calls/init calls changes the registry.
                 mod = registry[moduleName];
 
-                if (!found &&
-                    !defined[moduleName] &&
-                    mod && !mod.inited) {
+                if (!found && !defined[moduleName] && mod && !mod.inited) {
                     if (config.enforceDefine && (!shExports || !getGlobal(shExports))) {
                         if (hasPathFallback(moduleName)) {
                             return;
@@ -1689,19 +1690,20 @@ var requirejs, require, define;
                     moduleNamePlusExt = moduleNamePlusExt.substring(0, index);
                 }
 
-                return context.nameToUrl(moduleNamePlusExt, ext, relModuleMap);
+                return context.nameToUrl(normalize(moduleNamePlusExt, relModuleMap && relModuleMap.id, true),
+                                         ext);
             },
 
             /**
              * Converts a module name to a file path. Supports cases where
              * moduleName may actually be just an URL.
+             * Note that it **does not** call normalize on the moduleName,
+             * it is assumed to have already been normalized. This is an
+             * internal API, not a public one. Use toUrl for the public API.
              */
-            nameToUrl: function (moduleName, ext, relModuleMap) {
+            nameToUrl: function (moduleName, ext) {
                 var paths, pkgs, pkg, pkgPath, syms, i, parentModule, url,
                     parentPath;
-
-                //Normalize module name if have a base relative module name to work from.
-                moduleName = normalize(moduleName, relModuleMap && relModuleMap.id, true);
 
                 //If a colon is in the URL, it indicates a protocol is used and it is just
                 //an URL to a file, or if it starts with a slash, contains a query arg (i.e. ?)
@@ -1747,7 +1749,8 @@ var requirejs, require, define;
                     }
 
                     //Join the path parts together, then figure out if baseUrl is needed.
-                    url = syms.join('/') + (ext || '.js');
+                    url = syms.join('/');
+                    url += (ext || (/\?/.test(url) ? '' : '.js'));
                     url = (url.charAt(0) === '/' || url.match(/^[\w\+\.\-]+:/) ? '' : config.baseUrl) + url;
                 }
 
@@ -1784,7 +1787,7 @@ var requirejs, require, define;
                 //all old browsers will be supported, but this one was easy enough
                 //to support and still makes sense.
                 if (evt.type === 'load' ||
-                    (readyRegExp.test((evt.currentTarget || evt.srcElement).readyState))) {
+                        (readyRegExp.test((evt.currentTarget || evt.srcElement).readyState))) {
                     //Reset interactive script so a script node is not held onto for
                     //to long.
                     interactiveScript = null;
@@ -1824,8 +1827,8 @@ var requirejs, require, define;
     req = requirejs = function (deps, callback, errback, optional) {
 
         //Find the right context, use default
-        var contextName = defContextName,
-            context, config;
+        var context, config,
+            contextName = defContextName;
 
         // Determine if have config object in the call.
         if (!isArray(deps) && typeof deps !== 'string') {
@@ -1924,10 +1927,11 @@ var requirejs, require, define;
         if (isBrowser) {
             //In the browser so use a script tag
             node = config.xhtml ?
-                   document.createElementNS('http://www.w3.org/1999/xhtml', 'html:script') :
-                   document.createElement('script');
+                    document.createElementNS('http://www.w3.org/1999/xhtml', 'html:script') :
+                    document.createElement('script');
             node.type = config.scriptType || 'text/javascript';
             node.charset = 'utf-8';
+            node.async = true;
 
             node.setAttribute('data-requirecontext', context.contextName);
             node.setAttribute('data-requiremodule', moduleName);
@@ -1941,15 +1945,15 @@ var requirejs, require, define;
             //UNFORTUNATELY Opera implements attachEvent but does not follow the script
             //script execution mode.
             if (node.attachEvent &&
-                //Check if node.attachEvent is artificially added by custom script or
-                //natively supported by browser
-                //read https://github.com/jrburke/requirejs/issues/187
-                //if we can NOT find [native code] then it must NOT natively supported.
-                //in IE8, node.attachEvent does not have toString()
-                //Note the test for "[native code" with no closing brace, see:
-                //https://github.com/jrburke/requirejs/issues/273
-                !(node.attachEvent.toString && node.attachEvent.toString().indexOf('[native code') < 0) &&
-                !isOpera) {
+                    //Check if node.attachEvent is artificially added by custom script or
+                    //natively supported by browser
+                    //read https://github.com/jrburke/requirejs/issues/187
+                    //if we can NOT find [native code] then it must NOT natively supported.
+                    //in IE8, node.attachEvent does not have toString()
+                    //Note the test for "[native code" with no closing brace, see:
+                    //https://github.com/jrburke/requirejs/issues/273
+                    !(node.attachEvent.toString && node.attachEvent.toString().indexOf('[native code') < 0) &&
+                    !isOpera) {
                 //Probably IE. IE (at least 6-8) do not fire
                 //script onload right after executing the script, so
                 //we cannot tie the anonymous define call to a name.
@@ -2030,21 +2034,21 @@ var requirejs, require, define;
             //baseUrl, if it is not already set.
             dataMain = script.getAttribute('data-main');
             if (dataMain) {
-
-                //Pull off the directory of data-main for use as the
-                //baseUrl.
-                src = dataMain.split('/');
-                mainScript = src.pop();
-                subPath = src.length ? src.join('/')  + '/' : './';
-
                 //Set final baseUrl if there is not already an explicit one.
                 if (!cfg.baseUrl) {
+                    //Pull off the directory of data-main for use as the
+                    //baseUrl.
+                    src = dataMain.split('/');
+                    mainScript = src.pop();
+                    subPath = src.length ? src.join('/')  + '/' : './';
+
                     cfg.baseUrl = subPath;
+                    dataMain = mainScript;
                 }
 
                 //Strip off any trailing .js since dataMain is now
                 //like a module name.
-                dataMain = mainScript.replace(jsSuffixRegExp, '');
+                dataMain = dataMain.replace(jsSuffixRegExp, '');
 
                 //Put the data-main script in the files to load.
                 cfg.deps = cfg.deps ? cfg.deps.concat(dataMain) : [dataMain];
@@ -2255,13 +2259,18 @@ var requirejs, require, define;
             }
         } else {
             def(moduleName, function () {
+                //Get the original name, since relative requires may be
+                //resolved differently in node (issue #202)
+                var originalName = context.registry[moduleName] &&
+                            context.registry[moduleName].map.originalName;
+
                 try {
-                    return (context.config.nodeRequire || req.nodeRequire)(moduleName);
+                    return (context.config.nodeRequire || req.nodeRequire)(originalName);
                 } catch (e) {
                     err = new Error('Calling node\'s require("' +
-                                        moduleName + '") failed with error: ' + e);
+                                        originalName + '") failed with error: ' + e);
                     err.originalError = e;
-                    err.moduleName = moduleName;
+                    err.moduleName = originalName;
                     return req.onError(err);
                 }
             });
@@ -2726,6 +2735,31 @@ define('node/file', ['fs', 'path'], function (fs, path) {
                     fs.unlinkSync(fileName);
                 }
             }
+        },
+
+
+        /**
+         * Deletes any empty directories under the given directory.
+         */
+        deleteEmptyDirs: function (startDir) {
+            var dirFileArray, i, fileName, filePath, stat;
+
+            if (file.exists(startDir)) {
+                dirFileArray = fs.readdirSync(startDir);
+                for (i = 0; i < dirFileArray.length; i++) {
+                    fileName = dirFileArray[i];
+                    filePath = path.join(startDir, fileName);
+                    stat = fs.statSync(filePath);
+                    if (stat.isDirectory()) {
+                        file.deleteEmptyDirs(filePath);
+                    }
+                }
+
+                //If directory is now empty, remove it.
+                if (fs.readdirSync(startDir).length ===  0) {
+                    file.deleteFile(startDir);
+                }
+            }
         }
     };
 
@@ -2743,7 +2777,7 @@ if(env === 'rhino') {
  */
 //Helper functions to deal with file I/O.
 
-/*jslint plusplus: false, strict: false */
+/*jslint plusplus: false, strict: true */
 /*global java: false, define: false */
 
 define('rhino/file', function () {
@@ -2981,6 +3015,35 @@ define('rhino/file', function () {
                     }
                 }
                 fileObj["delete"]();
+            }
+        },
+
+        /**
+         * Deletes any empty directories under the given directory.
+         * The startDirIsJavaObject is private to this implementation's
+         * recursion needs.
+         */
+        deleteEmptyDirs: function (startDir, startDirIsJavaObject) {
+            var topDir = startDir,
+                dirFileArray, i, fileObj;
+
+            if (!startDirIsJavaObject) {
+                topDir = new java.io.File(startDir);
+            }
+
+            if (topDir.exists()) {
+                dirFileArray = topDir.listFiles();
+                for (i = 0; i < dirFileArray.length; i++) {
+                    fileObj = dirFileArray[i];
+                    if (fileObj.isDirectory()) {
+                        file.deleteEmptyDirs(fileObj, true);
+                    }
+                }
+
+                //If the directory is empty now, delete it.
+                if (topDir.listFiles().length === 0) {
+                    file.deleteFile(String(topDir.getPath()));
+                }
             }
         }
     };
@@ -3238,7 +3301,7 @@ define('logger', ['env!env/print'], function (print) {
 //so that the build does not attempt to inline some env modules,
 //like Node's fs and path.
 
-//Commit d72ed0a000c455290fde6f8114fe38f4aaf31469 on May 15, 2012
+//Commit 465a4eae86c7bae191b1ee427571543ace777117 on July 19, 2012
 define('esprima', ['exports'], function(exports) {
 /*
   Copyright (C) 2012 Ariya Hidayat <ariya.hidayat@gmail.com>
@@ -4215,14 +4278,11 @@ parseStatement: true, parseSourceElement: true */
                         throwError({}, Messages.UnterminatedRegExp);
                     }
                     str += ch;
-                }
-                else if (ch === '/') {
+                } else if (ch === '/') {
                     break;
-                }
-                else if (ch === '[') {
+                } else if (ch === '[') {
                     classMarker = true;
-                }
-                else if (isLineTerminator(ch)) {
+                } else if (isLineTerminator(ch)) {
                     throwError({}, Messages.UnterminatedRegExp);
                 }
             }
@@ -4539,17 +4599,7 @@ parseStatement: true, parseSourceElement: true */
     // Return true if provided expression is LeftHandSideExpression
 
     function isLeftHandSide(expr) {
-        switch (expr.type) {
-        case 'AssignmentExpression':
-        case 'BinaryExpression':
-        case 'ConditionalExpression':
-        case 'LogicalExpression':
-        case 'SequenceExpression':
-        case 'UnaryExpression':
-        case 'UpdateExpression':
-            return false;
-        }
-        return true;
+        return expr.type === Syntax.Identifier || expr.type === Syntax.MemberExpression;
     }
 
     // 11.1.4 Array Initialiser
@@ -4932,6 +4982,11 @@ parseStatement: true, parseSourceElement: true */
             if (strict && expr.type === Syntax.Identifier && isRestrictedWord(expr.name)) {
                 throwError({}, Messages.StrictLHSPostfix);
             }
+
+            if (!isLeftHandSide(expr)) {
+                throwError({}, Messages.InvalidLHSInAssignment);
+            }
+
             expr = {
                 type: Syntax.UpdateExpression,
                 operator: lex().value,
@@ -4955,6 +5010,11 @@ parseStatement: true, parseSourceElement: true */
             if (strict && expr.type === Syntax.Identifier && isRestrictedWord(expr.name)) {
                 throwError({}, Messages.StrictLHSPrefix);
             }
+
+            if (!isLeftHandSide(expr)) {
+                throwError({}, Messages.InvalidLHSInAssignment);
+            }
+
             expr = {
                 type: Syntax.UpdateExpression,
                 operator: token.value,
@@ -5045,34 +5105,19 @@ parseStatement: true, parseSourceElement: true */
 
         previousAllowIn = state.allowIn;
         state.allowIn = true;
-        expr = parseShiftExpression();
-        state.allowIn = previousAllowIn;
 
-        if (match('<') || match('>') || match('<=') || match('>=')) {
+        expr = parseShiftExpression();
+
+        while (match('<') || match('>') || match('<=') || match('>=') || (previousAllowIn && matchKeyword('in')) || matchKeyword('instanceof')) {
             expr = {
                 type: Syntax.BinaryExpression,
                 operator: lex().value,
                 left: expr,
-                right: parseRelationalExpression()
-            };
-        } else if (state.allowIn && matchKeyword('in')) {
-            lex();
-            expr = {
-                type: Syntax.BinaryExpression,
-                operator: 'in',
-                left: expr,
-                right: parseRelationalExpression()
-            };
-        } else if (matchKeyword('instanceof')) {
-            lex();
-            expr = {
-                type: Syntax.BinaryExpression,
-                operator: 'instanceof',
-                left: expr,
-                right: parseRelationalExpression()
+                right: parseShiftExpression()
             };
         }
 
+        state.allowIn = previousAllowIn;
         return expr;
     }
 
@@ -5111,14 +5156,14 @@ parseStatement: true, parseSourceElement: true */
         return expr;
     }
 
-    function parseBitwiseORExpression() {
+    function parseBitwiseXORExpression() {
         var expr = parseBitwiseANDExpression();
 
-        while (match('|')) {
+        while (match('^')) {
             lex();
             expr = {
                 type: Syntax.BinaryExpression,
-                operator: '|',
+                operator: '^',
                 left: expr,
                 right: parseBitwiseANDExpression()
             };
@@ -5127,16 +5172,16 @@ parseStatement: true, parseSourceElement: true */
         return expr;
     }
 
-    function parseBitwiseXORExpression() {
-        var expr = parseBitwiseORExpression();
+    function parseBitwiseORExpression() {
+        var expr = parseBitwiseXORExpression();
 
-        while (match('^')) {
+        while (match('|')) {
             lex();
             expr = {
                 type: Syntax.BinaryExpression,
-                operator: '^',
+                operator: '|',
                 left: expr,
-                right: parseBitwiseORExpression()
+                right: parseBitwiseXORExpression()
             };
         }
 
@@ -5146,7 +5191,7 @@ parseStatement: true, parseSourceElement: true */
     // 11.11 Binary Logical Operators
 
     function parseLogicalANDExpression() {
-        var expr = parseBitwiseXORExpression();
+        var expr = parseBitwiseORExpression();
 
         while (match('&&')) {
             lex();
@@ -5154,7 +5199,7 @@ parseStatement: true, parseSourceElement: true */
                 type: Syntax.LogicalExpression,
                 operator: '&&',
                 left: expr,
-                right: parseBitwiseXORExpression()
+                right: parseBitwiseORExpression()
             };
         }
 
@@ -5212,7 +5257,7 @@ parseStatement: true, parseSourceElement: true */
 
         if (matchAssign()) {
             // LeftHandSideExpression
-            if (state.lastParenthesized !== expr && !isLeftHandSide(expr)) {
+            if (!isLeftHandSide(expr)) {
                 throwError({}, Messages.InvalidLHSInAssignment);
             }
 
@@ -5530,9 +5575,10 @@ parseStatement: true, parseSourceElement: true */
 
                 if (matchKeyword('in')) {
                     // LeftHandSideExpression
-                    if (matchKeyword('in') && (state.lastParenthesized !== init && !isLeftHandSide(init))) {
+                    if (!isLeftHandSide(init)) {
                         throwError({}, Messages.InvalidLHSInForIn);
                     }
+
                     lex();
                     left = init;
                     right = parseExpression();
@@ -6539,6 +6585,15 @@ parseStatement: true, parseSourceElement: true */
                             node.loc.start = node.object.loc.start;
                         }
                     }
+
+                    if (node.type === Syntax.CallExpression) {
+                        if (typeof node.callee.range !== 'undefined') {
+                            node.range[0] = node.callee.range[0];
+                        }
+                        if (typeof node.callee.loc !== 'undefined') {
+                            node.loc.start = node.callee.loc.start;
+                        }
+                    }
                     return node;
                 }
             };
@@ -6817,8 +6872,8 @@ parseStatement: true, parseSourceElement: true */
 
 }(typeof exports === 'undefined' ? (esprima = {}) : exports));
 /* vim: set sw=4 ts=4 et tw=80 : */
-});
-define('uglifyjs/consolidator', ["require", "exports", "module", "./parse-js", "./process"], function(require, exports, module) {
+
+});define('uglifyjs/consolidator', ["require", "exports", "module", "./parse-js", "./process"], function(require, exports, module) {
 /**
  * @preserve Copyright 2012 Robert Gust-Bardon <http://robert.gust-bardon.org/>.
  * All rights reserved.
@@ -8038,7 +8093,8 @@ exports['ast_consolidate'] = function(oAbstractSyntaxTree) {
 /* End:                  */
 /* vim: set ft=javascript fenc=utf-8 et ts=2 sts=2 sw=2: */
 /* :mode=javascript:noTabs=true:tabSize=2:indentSize=2:deepIndent=true: */
-});define('uglifyjs/parse-js', ["exports"], function(exports) {
+});
+define('uglifyjs/parse-js', ["exports"], function(exports) {
 /***********************************************************************
 
   A JavaScript tokenizer / parser / beautifier / compressor.
@@ -9398,11 +9454,17 @@ exports.KEYWORDS = KEYWORDS;
 exports.ATOMIC_START_TOKEN = ATOMIC_START_TOKEN;
 exports.OPERATORS = OPERATORS;
 exports.is_alphanumeric_char = is_alphanumeric_char;
+exports.is_identifier_start = is_identifier_start;
+exports.is_identifier_char = is_identifier_char;
 exports.set_logger = function(logger) {
         warn = logger;
 };
-});define('uglifyjs/squeeze-more', ["require", "exports", "module", "./parse-js", "./process"], function(require, exports, module) {
 
+// Local variables:
+// js-indent-level: 8
+// End:
+});
+define('uglifyjs/squeeze-more', ["require", "exports", "module", "./parse-js", "./squeeze-more"], function(require, exports, module) {
 var jsp = require("./parse-js"),
     pro = require("./process"),
     slice = jsp.slice,
@@ -9477,7 +9539,12 @@ function ast_squeeze_more(ast) {
 };
 
 exports.ast_squeeze_more = ast_squeeze_more;
-});define('uglifyjs/process', ["require", "exports", "module", "./parse-js", "./squeeze-more"], function(require, exports, module) {
+
+// Local variables:
+// js-indent-level: 8
+// End:
+});
+define('uglifyjs/process', ["require", "exports", "module", "./parse-js", "./squeeze-more"], function(require, exports, module) {
 /***********************************************************************
 
   A JavaScript tokenizer / parser / beautifier / compressor.
@@ -9539,8 +9606,10 @@ exports.ast_squeeze_more = ast_squeeze_more;
  ***********************************************************************/
 
 var jsp = require("./parse-js"),
+    curry = jsp.curry,
     slice = jsp.slice,
     member = jsp.member,
+    is_identifier_char = jsp.is_identifier_char,
     PRECEDENCE = jsp.PRECEDENCE,
     OPERATORS = jsp.OPERATORS;
 
@@ -9868,8 +9937,8 @@ Scope.prototype = {
                         return name;
                 }
         },
-        active: function(dir) {
-                return member(dir, this.directives) || this.parent && this.parent.active(dir);
+        active_directive: function(dir) {
+                return member(dir, this.directives) || this.parent && this.parent.active_directive(dir);
         }
 };
 
@@ -9989,7 +10058,13 @@ function ast_add_scope(ast) {
 
 function ast_mangle(ast, options) {
         var w = ast_walker(), walk = w.walk, scope;
-        options = options || {};
+        options = defaults(options, {
+                mangle       : true,
+                toplevel     : false,
+                defines      : null,
+                except       : null,
+                no_functions : false
+        });
 
         function get_mangled(name, newMangle) {
                 if (!options.mangle) return name;
@@ -10016,7 +10091,7 @@ function ast_mangle(ast, options) {
         };
 
         function _lambda(name, args, body) {
-                if (!options.no_functions) {
+                if (!options.no_functions && options.mangle) {
                         var is_defun = this[0] == "defun", extra;
                         if (name) {
                                 if (is_defun) name = get_mangled(name);
@@ -10310,9 +10385,9 @@ function prepare_ifs(ast) {
                         var fi = statements[i];
                         if (fi[0] != "if") continue;
 
-                        if (fi[3] && walk(fi[3])) continue;
+                        if (fi[3]) continue;
 
-                        var t = walk(fi[2]);
+                        var t = fi[2];
                         if (!aborts(t)) continue;
 
                         var conditional = walk(fi[1]);
@@ -10371,6 +10446,10 @@ function for_side_effects(ast, handler) {
                 if (op == "++" || op == "--")
                         return found.apply(this, arguments);
         };
+        function binary(op) {
+                if (op == "&&" || op == "||")
+                        return found.apply(this, arguments);
+        };
         return w.with_walkers({
                 "try": found,
                 "throw": found,
@@ -10389,6 +10468,8 @@ function for_side_effects(ast, handler) {
                 "return": found,
                 "unary-prefix": unary,
                 "unary-postfix": unary,
+                "conditional": found,
+                "binary": binary,
                 "defun": found
         }, function(){
                 while (true) try {
@@ -10464,7 +10545,7 @@ function ast_lift_variables(ast) {
                         if (ret == null) ret = d;
                         else ret = [ "seq", d, ret ];
                 }
-                if (ret == null) {
+                if (ret == null && w.parent()[0] != "for") {
                         if (w.parent()[0] == "for-in")
                                 return [ "name", defs[0][0] ];
                         return MAP.skip;
@@ -10495,6 +10576,12 @@ function ast_lift_variables(ast) {
 };
 
 function ast_squeeze(ast, options) {
+        ast = squeeze_1(ast, options);
+        ast = squeeze_2(ast, options);
+        return ast;
+};
+
+function squeeze_1(ast, options) {
         options = defaults(options, {
                 make_seqs   : true,
                 dead_code   : true,
@@ -10566,17 +10653,7 @@ function ast_squeeze(ast, options) {
         };
 
         function _lambda(name, args, body) {
-                return [ this[0], name, args, with_scope(body.scope, function() {
-                        return tighten(body, "lambda");
-                }) ];
-        };
-
-        function with_scope(s, cont) {
-                var _scope = scope;
-                scope = s;
-                var ret = cont();
-                scope = _scope;
-                return ret;
+                return [ this[0], name, args, tighten(body, "lambda") ];
         };
 
         // this function does a few things:
@@ -10716,6 +10793,9 @@ function ast_squeeze(ast, options) {
                 t = walk(t);
                 e = walk(e);
 
+                if (empty(e) && empty(t))
+                        return [ "stat", c ];
+
                 if (empty(t)) {
                         c = negate(c);
                         t = e;
@@ -10736,8 +10816,6 @@ function ast_squeeze(ast, options) {
                                 }
                         })();
                 }
-                if (empty(e) && empty(t))
-                        return [ "stat", c ];
                 var ret = [ "if", c, t, e ];
                 if (t[0] == "if" && empty(t[3]) && empty(e)) {
                         ret = best_of(ret, walk([ "if", [ "binary", "&&", c, t[1] ], t[2] ]));
@@ -10795,9 +10873,7 @@ function ast_squeeze(ast, options) {
                 },
                 "if": make_if,
                 "toplevel": function(body) {
-                        return with_scope(this.scope, function() {
-                            return [ "toplevel", tighten(body) ];
-                        });
+                        return [ "toplevel", tighten(body) ];
                 },
                 "switch": function(expr, body) {
                         var last = body.length - 1;
@@ -10869,25 +10945,52 @@ function ast_squeeze(ast, options) {
                         }
                         return [ this[0], op, lvalue, rvalue ];
                 },
-                "directive": function(dir) {
-                        if (scope.active(dir))
-                            return [ "block" ];
-                        scope.directives.push(dir);
-                        return [ this[0], dir ];
-                },
                 "call": function(expr, args) {
                         expr = walk(expr);
                         if (options.unsafe && expr[0] == "dot" && expr[1][0] == "string" && expr[2] == "toString") {
                                 return expr[1];
                         }
                         return [ this[0], expr,  MAP(args, walk) ];
+                },
+                "num": function (num) {
+                        if (!isFinite(num))
+                                return [ "binary", "/", num === 1 / 0
+                                         ? [ "num", 1 ] : num === -1 / 0
+                                         ? [ "unary-prefix", "-", [ "num", 1 ] ]
+                                         : [ "num", 0 ], [ "num", 0 ] ];
+
+                        return [ this[0], num ];
                 }
         }, function() {
-                for (var i = 0; i < 2; ++i) {
-                        ast = prepare_ifs(ast);
-                        ast = walk(ast_add_scope(ast));
-                }
-                return ast;
+                return walk(prepare_ifs(walk(prepare_ifs(ast))));
+        });
+};
+
+function squeeze_2(ast, options) {
+        var w = ast_walker(), walk = w.walk, scope;
+        function with_scope(s, cont) {
+                var save = scope, ret;
+                scope = s;
+                ret = cont();
+                scope = save;
+                return ret;
+        };
+        function lambda(name, args, body) {
+                return [ this[0], name, args, with_scope(body.scope, curry(MAP, body, walk)) ];
+        };
+        return w.with_walkers({
+                "directive": function(dir) {
+                        if (scope.active_directive(dir))
+                                return [ "block" ];
+                        scope.directives.push(dir);
+                },
+                "toplevel": function(body) {
+                        return [ this[0], with_scope(this.scope, curry(MAP, body, walk)) ];
+                },
+                "function": lambda,
+                "defun": lambda
+        }, function(){
+                return walk(ast_add_scope(ast));
         });
 };
 
@@ -10981,6 +11084,15 @@ function gen_code(ast, options) {
                 finally { indentation -= incr; }
         };
 
+        function last_char(str) {
+                str = str.toString();
+                return str.charAt(str.length - 1);
+        };
+
+        function first_char(str) {
+                return str.toString().charAt(0);
+        };
+
         function add_spaces(a) {
                 if (beautify)
                         return a.join(" ");
@@ -10989,7 +11101,8 @@ function gen_code(ast, options) {
                         var next = a[i + 1];
                         b.push(a[i]);
                         if (next &&
-                            ((/[a-z0-9_\x24]$/i.test(a[i].toString()) && /^[a-z0-9_\x24]/i.test(next.toString())) ||
+                            ((is_identifier_char(last_char(a[i])) && (is_identifier_char(first_char(next))
+                                                                      || first_char(next) == "\\")) ||
                              (/[\+\-]$/.test(a[i].toString()) && /^[\+\-]/.test(next.toString())))) {
                                 b.push(" ");
                         }
@@ -11049,7 +11162,7 @@ function gen_code(ast, options) {
         };
 
         function make_num(num) {
-                var str = num.toString(10), a = [ str.replace(/^0\./, ".") ], m;
+                var str = num.toString(10), a = [ str.replace(/^0\./, ".").replace('e+', 'e') ], m;
                 if (Math.floor(num) === num) {
                         if (num >= 0) {
                                 a.push("0x" + num.toString(16).toLowerCase(), // probably pointless
@@ -11286,7 +11399,9 @@ function gen_code(ast, options) {
                         })), "]" ]);
                 },
                 "stat": function(stmt) {
-                        return make(stmt).replace(/;*\s*$/, ";");
+                        return stmt != null
+                                ? make(stmt).replace(/;*\s*$/, ";")
+                                : ";";
                 },
                 "seq": function() {
                         return add_commas(MAP(slice(arguments), make));
@@ -11542,7 +11657,12 @@ exports.MAP = MAP;
 
 // keep this last!
 exports.ast_squeeze_more = require("./squeeze-more").ast_squeeze_more;
-});define('uglifyjs/index', ["require", "exports", "module", "./parse-js", "./process", "./consolidator"], function(require, exports, module) {
+
+// Local variables:
+// js-indent-level: 8
+// End:
+});
+define('uglifyjs/index', ["require", "exports", "module", "./parse-js", "./process", "./consolidator"], function(require, exports, module) {
 //convienence function(src, [options]);
 function uglify(orig_code, options){
   options || (options = {});
@@ -11570,151 +11690,71 @@ module.exports = uglify
 /*jslint plusplus: true */
 /*global define: false */
 
-define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
+define('parse', ['./esprima'], function (esprima) {
     'use strict';
 
-    var parser = uglify.parser,
-        processor = uglify.uglify,
-        ostring = Object.prototype.toString,
-        isArray;
+    var ostring = Object.prototype.toString,
+        //This string is saved off because JSLint complains
+        //about obj.arguments use, as 'reserved word'
+        argPropName = 'arguments';
 
-    if (Array.isArray) {
-        isArray = Array.isArray;
-    } else {
-        isArray = function (it) {
-            return ostring.call(it) === "[object Array]";
-        };
-    }
+    //From an esprima example for traversing its ast.
+    function traverse(object, visitor) {
+        var key, child;
 
-    /**
-     * Determines if the AST node is an array literal
-     */
-    function isArrayLiteral(node) {
-        return node[0] === 'array';
-    }
-
-    /**
-     * Determines if the AST node is an object literal
-     */
-    function isObjectLiteral(node) {
-        return node[0] === 'object';
-    }
-
-    /**
-     * Converts a regular JS array of strings to an AST node that
-     * represents that array.
-     * @param {Array} ary
-     * @param {Node} an AST node that represents an array of strings.
-     */
-    function toAstArray(ary) {
-        var output = [
-            'array',
-            []
-        ],
-        i, item;
-
-        for (i = 0; i < ary.length; i++) {
-            item = ary[i];
-            output[1].push([
-                'string',
-                item
-            ]);
+        if (!object) {
+            return;
         }
 
-        return output;
+        if (visitor.call(null, object) === false) {
+            return false;
+        }
+        for (key in object) {
+            if (object.hasOwnProperty(key)) {
+                child = object[key];
+                if (typeof child === 'object' && child !== null) {
+                    if (traverse(child, visitor) === false) {
+                        return false;
+                    }
+                }
+            }
+        }
     }
 
+
     /**
-     * Validates a node as being an object literal (like for i18n bundles)
-     * or an array literal with just string members. If an array literal,
-     * only return array members that are full strings. So the caller of
-     * this function should use the return value as the new value for the
-     * node.
-     *
-     * This function does not need to worry about comments, they are not
-     * present in this AST.
+     * Pulls out dependencies from an array literal with just string members.
+     * If string literals, will just return those string values in an array,
+     * skipping other items in the array.
      *
      * @param {Node} node an AST node.
      *
-     * @returns {Node} an AST node to use for the valid dependencies.
+     * @returns {Array} an array of strings.
      * If null is returned, then it means the input node was not a valid
      * dependency.
      */
-    function validateDeps(node) {
-        var newDeps = ['array', []],
-            arrayArgs, i, dep;
-
-        if (!node) {
-            return null;
-        }
-
-        if (isObjectLiteral(node) || node[0] === 'function') {
-            return node;
-        }
-
-        //Dependencies can be an object literal or an array.
-        if (!isArrayLiteral(node)) {
-            return null;
-        }
-
-        arrayArgs = node[1];
-
-        for (i = 0; i < arrayArgs.length; i++) {
-            dep = arrayArgs[i];
-            if (dep[0] === 'string') {
-                newDeps[1].push(dep);
-            }
-        }
-        return newDeps[1].length ? newDeps : null;
-    }
-
-    /**
-     * Gets dependencies from a node, but only if it is an array literal,
-     * and only if the dependency is a string literal.
-     *
-     * This function does not need to worry about comments, they are not
-     * present in this AST.
-     *
-     * @param {Node} node an AST node.
-     *
-     * @returns {Array} of valid dependencies.
-     * If null is returned, then it means the input node was not a valid
-     * array literal, or did not have any string literals..
-     */
     function getValidDeps(node) {
-        var newDeps = [],
-            arrayArgs, i, dep;
-
-        if (!node) {
-            return null;
+        if (!node || node.type !== 'ArrayExpression' || !node.elements) {
+            return;
         }
 
-        if (isObjectLiteral(node) || node[0] === 'function') {
-            return null;
-        }
+        var deps = [];
 
-        //Dependencies can be an object literal or an array.
-        if (!isArrayLiteral(node)) {
-            return null;
-        }
-
-        arrayArgs = node[1];
-
-        for (i = 0; i < arrayArgs.length; i++) {
-            dep = arrayArgs[i];
-            if (dep[0] === 'string') {
-                newDeps.push(dep[1]);
+        node.elements.some(function (elem) {
+            if (elem.type === 'Literal') {
+                deps.push(elem.value);
             }
-        }
-        return newDeps.length ? newDeps : null;
+        });
+
+        return deps.length ? deps : undefined;
     }
 
     /**
-     * Main parse function. Returns a string of any valid require or define/require.def
-     * calls as part of one JavaScript source string.
+     * Main parse function. Returns a string of any valid require or
+     * define/require.def calls as part of one JavaScript source string.
      * @param {String} moduleName the module name that represents this file.
-     * It is used to create a default define if there is not one already for the file.
-     * This allows properly tracing dependencies for builds. Otherwise, if
+     * It is used to create a default define if there is not one already for the
+     * file. This allows properly tracing dependencies for builds. Otherwise, if
      * the file just has a require() call, the file dependencies will not be
      * properly reflected: the file will come before its dependencies.
      * @param {String} moduleName
@@ -11722,40 +11762,23 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      * @param {String} fileContents
      * @param {Object} options optional options. insertNeedsDefine: true will
      * add calls to require.needsDefine() if appropriate.
-     * @returns {String} JS source string or null, if no require or define/require.def
-     * calls are found.
+     * @returns {String} JS source string or null, if no require or
+     * define/require.def calls are found.
      */
     function parse(moduleName, fileName, fileContents, options) {
         options = options || {};
 
         //Set up source input
-        var moduleDeps = [],
+        var i, moduleCall, depString,
+            moduleDeps = [],
             result = '',
             moduleList = [],
             needsDefine = true,
-            astRoot = parser.parse(fileContents),
-            i, moduleCall, depString;
+            astRoot = esprima.parse(fileContents);
 
         parse.recurse(astRoot, function (callName, config, name, deps) {
-            //If name is an array, it means it is an anonymous module,
-            //so adjust args appropriately. An anonymous module could
-            //have a FUNCTION as the name type, but just ignore those
-            //since we just want to find dependencies.
-            if (name && isArrayLiteral(name)) {
-                deps = name;
-                name = null;
-            }
-
-            deps = getValidDeps(deps);
             if (!deps) {
                 deps = [];
-            }
-
-            //Get the name as a string literal, if it is available.
-            if (name && name[0] === 'string') {
-                name = name[1];
-            } else {
-                name = null;
             }
 
             if (callName === 'define' && (!name || name === moduleName)) {
@@ -11775,7 +11798,7 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
 
             //If define was found, no need to dive deeper, unless
             //the config explicitly wants to dig deeper.
-            return !options.findNestedDependencies;
+            return !!options.findNestedDependencies;
         }, options);
 
         if (options.insertNeedsDefine && needsDefine) {
@@ -11797,14 +11820,17 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
                     moduleDeps = [];
                 }
 
-                depString = moduleCall.deps.length ? '["' + moduleCall.deps.join('","') + '"]' : '[]';
-                result += 'define("' + moduleCall.name + '",' + depString + ');';
+                depString = moduleCall.deps.length ? '["' +
+                            moduleCall.deps.join('","') + '"]' : '[]';
+                result += 'define("' + moduleCall.name + '",' +
+                          depString + ');';
             }
             if (moduleDeps.length) {
                 if (result) {
                     result += '\n';
                 }
-                depString = moduleDeps.length ? '["' + moduleDeps.join('","') + '"]' : '[]';
+                depString = moduleDeps.length ? '["' + moduleDeps.join('","') +
+                            '"]' : '[]';
                 result += 'define("' + moduleName + '",' + depString + ');';
             }
         }
@@ -11812,56 +11838,44 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
         return result || null;
     }
 
-    //Add some private methods to object for use in derived objects.
-    parse.isArray = isArray;
-    parse.isObjectLiteral = isObjectLiteral;
-    parse.isArrayLiteral = isArrayLiteral;
-
     /**
      * Handles parsing a file recursively for require calls.
      * @param {Array} parentNode the AST node to start with.
      * @param {Function} onMatch function to call on a parse match.
      * @param {Object} [options] This is normally the build config options if
      * it is passed.
-     * @param {Function} [recurseCallback] function to call on each valid
-     * node, defaults to parse.parseNode.
      */
-    parse.recurse = function (parentNode, onMatch, options, recurseCallback) {
-        var hasHas = options && options.has,
-            i, node;
+    parse.recurse = function (object, onMatch, options) {
+        //Like traverse, but skips if branches that would not be processed
+        //after has application that results in tests of true or false boolean
+        //literal values.
+        var key, child,
+            hasHas = options && options.has;
 
-        recurseCallback = recurseCallback || this.parseNode;
+        if (!object) {
+            return;
+        }
 
-        if (isArray(parentNode)) {
-            for (i = 0; i < parentNode.length; i++) {
-                node = parentNode[i];
-                if (isArray(node)) {
-                    //If has config is in play, if calls have been converted
-                    //by this point to be true/false values. So, if
-                    //options has a 'has' value, skip if branches that have
-                    //literal false values.
-
-                    //uglify returns if constructs in an array:
-                    //[0]: 'if'
-                    //[1]: the condition, ['name', true | false] for the has replaced case.
-                    //[2]: the block to process if true
-                    //[3]: the block to process if false
-                    //For if/else if/else, the else if is in the [3],
-                    //so only ever have to deal with this structure.
-                    if (hasHas && node[0] === 'if' && node[1] && node[1][0] === 'name' &&
-                        (node[1][1] === 'true' || node[1][1] === 'false')) {
-                        if (node[1][1] === 'true') {
-                            this.recurse([node[2]], onMatch, options, recurseCallback);
-                        } else {
-                            this.recurse([node[3]], onMatch, options, recurseCallback);
-                        }
-                    } else {
-                        //If the onMatch indicated parsing should
-                        //stop for children of this node, stop, otherwise,
-                        //keep going.
-                        if (!recurseCallback(node, onMatch)) {
-                            this.recurse(node, onMatch, options, recurseCallback);
-                        }
+        //If has replacement has resulted in if(true){} or if(false){}, take
+        //the appropriate branch and skip the other one.
+        if (hasHas && object.type === 'IfStatement' && object.test.type &&
+                object.test.type === 'Literal') {
+            if (object.test.value) {
+                //Take the if branch
+                this.recurse(object.consequent, onMatch, options);
+            } else {
+                //Take the else branch
+                this.recurse(object.alternate, onMatch, options);
+            }
+        } else {
+            if (this.parseNode(object, onMatch) === false) {
+                return;
+            }
+            for (key in object) {
+                if (object.hasOwnProperty(key)) {
+                    child = object[key];
+                    if (typeof child === 'object' && child !== null) {
+                        this.recurse(child, onMatch, options);
                     }
                 }
             }
@@ -11869,14 +11883,25 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
     };
 
     /**
-     * Determines if the file defines require().
+     * Determines if the file defines the require/define module API.
+     * Specifically, it looks for the `define.amd = ` expression.
      * @param {String} fileName
      * @param {String} fileContents
      * @returns {Boolean}
      */
     parse.definesRequire = function (fileName, fileContents) {
-        var astRoot = parser.parse(fileContents);
-        return this.nodeHasRequire(astRoot);
+        var found = false;
+
+        traverse(esprima.parse(fileContents), function (node) {
+            if (parse.hasDefineAmd(node)) {
+                found = true;
+
+                //Stop traversal
+                return false;
+            }
+        });
+
+        return found;
     };
 
     /**
@@ -11890,7 +11915,7 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      * returns an array, but could be of length zero.
      */
     parse.getAnonDeps = function (fileName, fileContents) {
-        var astRoot = parser.parse(fileContents),
+        var astRoot = esprima.parse(fileContents),
             defFunc = this.findAnonDefineFactory(astRoot);
 
         return parse.getAnonDepsFromNode(defFunc);
@@ -11909,11 +11934,11 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
         if (node) {
             this.findRequireDepNames(node, deps);
 
-            //If no deps, still add the standard CommonJS require, exports, module,
-            //in that order, to the deps, but only if specified as function args.
-            //In particular, if exports is used, it is favored over the return
-            //value of the function, so only add it if asked.
-            funcArgLength = node[2] && node[2].length;
+            //If no deps, still add the standard CommonJS require, exports,
+            //module, in that order, to the deps, but only if specified as
+            //function args. In particular, if exports is used, it is favored
+            //over the return value of the function, so only add it if asked.
+            funcArgLength = node.params && node.params.length;
             if (funcArgLength) {
                 deps = (funcArgLength > 1 ? ["require", "exports", "module"] :
                         ["require"]).concat(deps);
@@ -11928,41 +11953,39 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      * @returns {Boolean}
      */
     parse.findAnonDefineFactory = function (node) {
-        var callback, i, n, call, args;
+        var match;
 
-        if (isArray(node)) {
-            if (node[0] === 'call' && node.length > 2) {
-                call = node[1];
-                args = node[2];
-                if ((call[0] === 'name' && call[1] === 'define') ||
-                           (call[0] === 'dot' && call[1][1] === 'require' && call[2] === 'def')) {
+        traverse(node, function (node) {
+            var arg0, arg1;
 
-                    //There should only be one argument and it should be a function,
-                    //or a named module with function as second arg
-                    if (args.length === 1 && args[0][0] === 'function') {
-                        return args[0];
-                    } else if (args.length === 2 && args[0][0] === 'string' &&
-                               args[1][0] === 'function') {
-                        return args[1];
-                    }
+            if (node && node.type === 'CallExpression' &&
+                    node.callee && node.callee.type === 'Identifier' &&
+                    node.callee.name === 'define' && node[argPropName]) {
+
+                //Just the factory function passed to define
+                arg0 = node[argPropName][0];
+                if (arg0 && arg0.type === 'FunctionExpression') {
+                    match = arg0;
+                    return false;
+                }
+
+                //A string literal module ID followed by the factory function.
+                arg1 = node[argPropName][1];
+                if (arg0.type === 'Literal' &&
+                        arg1 && arg1.type === 'FunctionExpression') {
+                    match = arg1;
+                    return false;
                 }
             }
+        });
 
-            //Check child nodes
-            for (i = 0; i < node.length; i++) {
-                n = node[i];
-                callback = this.findAnonDefineFactory(n);
-                if (callback) {
-                    return callback;
-                }
-            }
-        }
-
-        return null;
+        return match;
     };
 
     /**
-     * Finds any config that is passed to requirejs.
+     * Finds any config that is passed to requirejs. That includes calls to
+     * require/requirejs.config(), as well as require({}, ...) and
+     * requirejs({}, ...)
      * @param {String} fileName
      * @param {String} fileContents
      *
@@ -11972,22 +11995,33 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      */
     parse.findConfig = function (fileName, fileContents) {
         /*jslint evil: true */
-        //This is a litle bit inefficient, it ends up with two uglifyjs parser
-        //calls. Can revisit later, but trying to build out larger functional
-        //pieces first.
-        var foundConfig = null,
-            astRoot = parser.parse(fileContents);
+        var jsConfig,
+            foundConfig = null,
+            astRoot = esprima.parse(fileContents, {
+                range: true
+            });
 
-        parse.recurse(astRoot, function (configNode) {
-            var jsConfig;
+        traverse(astRoot, function (node) {
+            var arg,
+                c = node && node.callee,
+                requireType = parse.hasRequire(node);
 
-            if (!foundConfig && configNode) {
-                jsConfig = parse.nodeToString(configNode);
-                foundConfig = eval('(' + jsConfig + ')');
-                return foundConfig;
+            if (requireType && (requireType === 'require' ||
+                    requireType === 'requirejs' ||
+                    requireType === 'requireConfig' ||
+                    requireType === 'requirejsConfig')) {
+
+                arg = node[argPropName] && node[argPropName][0];
+
+                if (arg && arg.type === 'ObjectExpression') {
+                    jsConfig = parse.nodeToString(fileContents, arg);
+                    foundConfig = eval('(' + jsConfig + ')');
+                    return false;
+                }
             }
-            return undefined;
-        }, null, parse.parseConfigNode);
+
+
+        });
 
         return foundConfig;
     };
@@ -12002,20 +12036,10 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      * have not been normalized, they may be relative IDs.
      */
     parse.findDependencies = function (fileName, fileContents, options) {
-        //This is a litle bit inefficient, it ends up with two uglifyjs parser
-        //calls. Can revisit later, but trying to build out larger functional
-        //pieces first.
         var dependencies = [],
-            astRoot = parser.parse(fileContents);
+            astRoot = esprima.parse(fileContents);
 
         parse.recurse(astRoot, function (callName, config, name, deps) {
-            //Normalize the input args.
-            if (name && isArrayLiteral(name)) {
-                deps = name;
-                name = null;
-            }
-
-            deps = getValidDeps(deps);
             if (deps) {
                 dependencies = dependencies.concat(deps);
             }
@@ -12025,43 +12049,73 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
     };
 
     /**
-     * Finds only CJS dependencies, ones that are the form require('stringLiteral')
+     * Finds only CJS dependencies, ones that are the form
+     * require('stringLiteral')
      */
     parse.findCjsDependencies = function (fileName, fileContents, options) {
-        //This is a litle bit inefficient, it ends up with two uglifyjs parser
-        //calls. Can revisit later, but trying to build out larger functional
-        //pieces first.
-        var dependencies = [],
-            astRoot = parser.parse(fileContents);
+        var dependencies = [];
 
-        parse.recurse(astRoot, function (dep) {
-            dependencies.push(dep);
-        }, options, function (node, onMatch) {
+        traverse(esprima.parse(fileContents), function (node) {
+            var arg;
 
-            var call, args;
-
-            if (!isArray(node)) {
-                return false;
-            }
-
-            if (node[0] === 'call') {
-                call = node[1];
-                args = node[2];
-
-                if (call) {
-                    //A require('') use.
-                    if (call[0] === 'name' && call[1] === 'require' &&
-                        args[0][0] === 'string') {
-                        return onMatch(args[0][1]);
-                    }
+            if (node && node.type === 'CallExpression' && node.callee &&
+                    node.callee.type === 'Identifier' &&
+                    node.callee.name === 'require' && node[argPropName] &&
+                    node[argPropName].length === 1) {
+                arg = node[argPropName][0];
+                if (arg.type === 'Literal') {
+                    dependencies.push(arg.value);
                 }
             }
-
-            return false;
-
         });
 
         return dependencies;
+    };
+
+    //function define() {}
+    parse.hasDefDefine = function (node) {
+        return node.type === 'FunctionDeclaration' && node.id &&
+                    node.id.type === 'Identifier' && node.id.name === 'define';
+    };
+
+    //define.amd = ...
+    parse.hasDefineAmd = function (node) {
+        return node && node.type === 'AssignmentExpression' &&
+            node.left && node.left.type === 'MemberExpression' &&
+            node.left.object && node.left.object.name === 'define' &&
+            node.left.property && node.left.property.name === 'amd';
+    };
+
+    //require(), requirejs(), require.config() and requirejs.config()
+    parse.hasRequire = function (node) {
+        var callName,
+            c = node && node.callee;
+
+        if (node && node.type === 'CallExpression' && c) {
+            if (c.type === 'Identifier' &&
+                    (c.name === 'require' ||
+                    c.name === 'requirejs')) {
+                //A require/requirejs({}, ...) call
+                callName = c.name;
+            } else if (c.type === 'MemberExpression' &&
+                    c.object &&
+                    c.object.type === 'Identifier' &&
+                    (c.object.name === 'require' ||
+                        c.object.name === 'requirejs') &&
+                    c.property && c.property.name === 'config') {
+                // require/requirejs.config({}) call
+                callName = c.object.name + 'Config';
+            }
+        }
+
+        return callName;
+    };
+
+    //define()
+    parse.hasDefine = function (node) {
+        return node && node.type === 'CallExpression' && node.callee &&
+            node.callee.type === 'Identifier' &&
+            node.callee.name === 'define';
     };
 
     /**
@@ -12069,15 +12123,36 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      * file. Also finds out if define() is declared and if define.amd is called.
      */
     parse.usesAmdOrRequireJs = function (fileName, fileContents, options) {
-        var astRoot = parser.parse(fileContents),
-            uses;
+        var uses;
 
-        parse.recurse(astRoot, function (prop) {
-            if (!uses) {
-                uses = {};
+        traverse(esprima.parse(fileContents), function (node) {
+            var type, callName, arg;
+
+            if (parse.hasDefDefine(node)) {
+                //function define() {}
+                type = 'declaresDefine';
+            } else if (parse.hasDefineAmd(node)) {
+                type = 'defineAmd';
+            } else {
+                callName = parse.hasRequire(node);
+                if (callName) {
+                    arg = node[argPropName] && node[argPropName][0];
+                    if (arg && (arg.type === 'ObjectExpression' ||
+                            arg.type === 'ArrayExpression')) {
+                        type = callName;
+                    }
+                } else if (parse.hasDefine(node)) {
+                    type = 'define';
+                }
             }
-            uses[prop] = true;
-        }, options, parse.findAmdOrRequireJsNode);
+
+            if (type) {
+                if (!uses) {
+                    uses = {};
+                }
+                uses[type] = true;
+            }
+        });
 
         return uses;
     };
@@ -12089,58 +12164,50 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      */
     parse.usesCommonJs = function (fileName, fileContents, options) {
         var uses = null,
-            assignsExports = false,
-            astRoot = parser.parse(fileContents);
+            assignsExports = false;
 
-        parse.recurse(astRoot, function (prop) {
-            if (prop === 'varExports') {
-                assignsExports = true;
-            } else if (prop !== 'exports' || !assignsExports) {
-                if (!uses) {
-                    uses = {};
+
+        traverse(esprima.parse(fileContents), function (node) {
+            var type,
+                exp = node.expression;
+
+            if (node.type === 'Identifier' &&
+                    (node.name === '__dirname' || node.name === '__filename')) {
+                type = node.name.substring(2);
+            } else if (node.type === 'VariableDeclarator' && node.id &&
+                    node.id.type === 'Identifier' &&
+                        node.id.name === 'exports') {
+                //Hmm, a variable assignment for exports, so does not use cjs
+                //exports.
+                type = 'varExports';
+            } else if (exp && exp.type === 'AssignmentExpression' && exp.left &&
+                    exp.left.type === 'MemberExpression' && exp.left.object) {
+                if (exp.left.object.name === 'module' && exp.left.property &&
+                        exp.left.property.name === 'exports') {
+                    type = 'moduleExports';
+                } else if (exp.left.object.name === 'exports' &&
+                        exp.left.property) {
+                    type = 'exports';
                 }
-                uses[prop] = true;
+
+            } else if (node && node.type === 'CallExpression' && node.callee &&
+                    node.callee.type === 'Identifier' &&
+                    node.callee.name === 'require' && node[argPropName] &&
+                    node[argPropName].length === 1 &&
+                    node[argPropName][0].type === 'Literal') {
+                type = 'require';
             }
-        }, options, function (node, onMatch) {
 
-            var call, args;
-
-            if (!isArray(node)) {
-                return false;
-            }
-
-            if (node[0] === 'name' && (node[1] === '__dirname' || node[1] === '__filename')) {
-                return onMatch(node[1].substring(2));
-            } else if (node[0] === 'var' && node[1] && node[1][0] && node[1][0][0] === 'exports') {
-                //Hmm, a variable assignment for exports, so does not use cjs exports.
-                return onMatch('varExports');
-            } else if (node[0] === 'assign' && node[2] && node[2][0] === 'dot') {
-                args = node[2][1];
-
-                if (args) {
-                    //An exports or module.exports assignment.
-                    if (args[0] === 'name' && args[1] === 'module' &&
-                        node[2][2] === 'exports') {
-                        return onMatch('moduleExports');
-                    } else if (args[0] === 'name' && args[1] === 'exports') {
-                        return onMatch('exports');
+            if (type) {
+                if (type === 'varExports') {
+                    assignsExports = true;
+                } else if (type !== 'exports' || !assignsExports) {
+                    if (!uses) {
+                        uses = {};
                     }
-                }
-            } else if (node[0] === 'call') {
-                call = node[1];
-                args = node[2];
-
-                if (call) {
-                    //A require('') use.
-                    if (call[0] === 'name' && call[1] === 'require' &&
-                        args[0][0] === 'string') {
-                        return onMatch('require');
-                    }
+                    uses[type] = true;
                 }
             }
-
-            return false;
-
         });
 
         return uses;
@@ -12150,79 +12217,25 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
     parse.findRequireDepNames = function (node, deps) {
         var moduleName, i, n, call, args;
 
-        if (isArray(node)) {
-            if (node[0] === 'call') {
-                call = node[1];
-                args = node[2];
+        traverse(node, function (node) {
+            var arg;
 
-                if (call && call[0] === 'name' && call[1] === 'require') {
-                    moduleName = args[0];
-                    if (moduleName[0] === 'string') {
-                        deps.push(moduleName[1]);
-                    }
-                }
+            if (node && node.type === 'CallExpression' && node.callee &&
+                    node.callee.type === 'Identifier' &&
+                    node.callee.name === 'require' &&
+                    node[argPropName] && node[argPropName].length === 1) {
 
-
-            }
-
-            //Check child nodes
-            for (i = 0; i < node.length; i++) {
-                n = node[i];
-                this.findRequireDepNames(n, deps);
-            }
-        }
-    };
-
-    /**
-     * Determines if a given node contains a require() definition.
-     * @param {Array} node
-     * @returns {Boolean}
-     */
-    parse.nodeHasRequire = function (node) {
-        var i, n;
-
-        if (this.isDefineNode(node)) {
-            return true;
-        }
-
-        if (isArray(node)) {
-            for (i = 0; i < node.length; i++) {
-                n = node[i];
-                if (this.nodeHasRequire(n)) {
-                    return true;
+                arg = node[argPropName][0];
+                if (arg.type === 'Literal') {
+                    deps.push(arg.value);
                 }
             }
-        }
-
-        return false;
+        });
     };
 
     /**
-     * Is the given node the actual definition of define(). Actually uses
-     * the definition of define.amd to find require.
-     * @param {Array} node
-     * @returns {Boolean}
-     */
-    parse.isDefineNode = function (node) {
-        //Actually look for the define.amd = assignment, since
-        //that is more indicative of RequireJS vs a plain require definition.
-        var assign;
-        if (!node) {
-            return null;
-        }
-
-        if (node[0] === 'assign' && node[1] === true) {
-            assign = node[2];
-            if (assign[0] === 'dot' && assign[1][0] === 'name' &&
-                assign[1][1] === 'define' && assign[2] === 'amd') {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    /**
-     * Determines if a specific node is a valid require or define/require.def call.
+     * Determines if a specific node is a valid require or define/require.def
+     * call.
      * @param {Array} node
      * @param {Function} onMatch a function to call when a match is found.
      * It is passed the match name, and the config, name, deps possible args.
@@ -12232,187 +12245,90 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      * Otherwise null.
      */
     parse.parseNode = function (node, onMatch) {
-        var call, name, config, deps, args, cjsDeps;
+        var name, deps, cjsDeps, arg, factory,
+            args = node && node[argPropName],
+            callName = parse.hasRequire(node);
 
-        if (!isArray(node)) {
-            return false;
-        }
-
-        if (node[0] === 'call') {
-            call = node[1];
-            args = node[2];
-
-            if (call) {
-                if (call[0] === 'name' &&
-                   (call[1] === 'require' || call[1] === 'requirejs')) {
-
-                    //It is a plain require() call.
-                    config = args[0];
-                    deps = args[1];
-                    if (isArrayLiteral(config)) {
-                        deps = config;
-                        config = null;
-                    }
-
-                    deps = validateDeps(deps);
-                    if (!deps) {
-                        return null;
-                    }
-
-                    return onMatch("require", null, null, deps);
-
-                } else if (call[0] === 'name' && call[1] === 'define') {
-
-                    //A define call
-                    name = args[0];
-                    deps = args[1];
-                    //Only allow define calls that match what is expected
-                    //in an AMD call:
-                    //* first arg should be string, array, function or object
-                    //* second arg optional, or array, function or object.
-                    //This helps weed out calls to a non-AMD define, but it is
-                    //not completely robust. Someone could create a define
-                    //function that still matches this shape, but this is the
-                    //best that is possible, and at least allows UglifyJS,
-                    //which does create its own internal define in one file,
-                    //to be inlined.
-                    if (((name[0] === 'string' || isArrayLiteral(name) ||
-                          name[0] === 'function' || isObjectLiteral(name))) &&
-                        (!deps || isArrayLiteral(deps) ||
-                         deps[0] === 'function' || isObjectLiteral(deps) ||
-                         // allow define(['dep'], factory) pattern
-                         (isArrayLiteral(name) && deps[0] === 'name' && args.length === 2))) {
-
-                        //If first arg is a function, could be a commonjs wrapper,
-                        //look inside for commonjs dependencies.
-                        //Also, if deps is a function look for commonjs deps.
-                        if (name && name[0] === 'function') {
-                            cjsDeps = parse.getAnonDepsFromNode(name);
-                            if (cjsDeps.length) {
-                                name = toAstArray(cjsDeps);
-                            }
-                        } else if (deps && deps[0] === 'function') {
-                            cjsDeps = parse.getAnonDepsFromNode(deps);
-                            if (cjsDeps.length) {
-                                deps = toAstArray(cjsDeps);
-                            }
-                        }
-
-                        return onMatch("define", null, name, deps);
-                    }
+        if (callName === 'require' || callName === 'requirejs') {
+            //A plain require/requirejs call
+            arg = node[argPropName] && node[argPropName][0];
+            if (arg.type !== 'ArrayExpression') {
+                if (arg.type === 'ObjectExpression') {
+                    //A config call, try the second arg.
+                    arg = node[argPropName][1];
                 }
             }
-        }
 
-        return false;
+            deps = getValidDeps(arg);
+            if (!deps) {
+                return;
+            }
+
+            return onMatch("require", null, null, deps);
+        } else if (parse.hasDefine(node) && args && args.length) {
+            name = args[0];
+            deps = args[1];
+            factory = args[2];
+
+            if (name.type === 'ArrayExpression') {
+                //No name, adjust args
+                factory = deps;
+                deps = name;
+                name = null;
+            } else if (name.type === 'FunctionExpression') {
+                //Just the factory, no name or deps
+                factory = name;
+                name = deps = null;
+            } else if (name.type !== 'Literal') {
+                 //An object literal, just null out
+                name = deps = factory = null;
+            }
+
+            if (name && name.type === 'Literal' && deps) {
+                if (deps.type === 'FunctionExpression') {
+                    //deps is the factory
+                    factory = deps;
+                    deps = null;
+                } else if (deps.type === 'ObjectExpression') {
+                    //deps is object literal, null out
+                    deps = factory = null;
+                }
+            }
+
+            if (deps && deps.type === 'ArrayExpression') {
+                deps = getValidDeps(deps);
+            } else if (factory && factory.type === 'FunctionExpression') {
+                //If no deps and a factory function, could be a commonjs sugar
+                //wrapper, scan the function for dependencies.
+                cjsDeps = parse.getAnonDepsFromNode(factory);
+                if (cjsDeps.length) {
+                    deps = cjsDeps;
+                }
+            } else if (deps || factory) {
+                //Does not match the shape of an AMD call.
+                return;
+            }
+
+            //Just save off the name as a string instead of an AST object.
+            if (name && name.type === 'Literal') {
+                name = name.value;
+            }
+
+            return onMatch("define", null, name, deps);
+        }
     };
 
     /**
-     * Looks for define(), require({} || []), requirejs({} || []) calls.
-     */
-    parse.findAmdOrRequireJsNode = function (node, onMatch) {
-        var call, args, configNode, type;
-
-        if (!isArray(node)) {
-            return false;
-        }
-
-        if (node[0] === 'defun' && node[1] === 'define') {
-            type = 'declaresDefine';
-        } else if (node[0] === 'assign' && node[2] && node[2][2] === 'amd' &&
-            node[2][1] && node[2][1][0] === 'name' &&
-            node[2][1][1] === 'define') {
-            type = 'defineAmd';
-        } else if (node[0] === 'call') {
-            call = node[1];
-            args = node[2];
-
-            if (call) {
-                if ((call[0] === 'dot' &&
-                   (call[1] && call[1][0] === 'name' &&
-                    (call[1][1] === 'require' || call[1][1] === 'requirejs')) &&
-                   call[2] === 'config')) {
-                    //A require.config() or requirejs.config() call.
-                    type = call[1][1] + 'Config';
-                } else if (call[0] === 'name' &&
-                   (call[1] === 'require' || call[1] === 'requirejs')) {
-                    //A require() or requirejs() config call.
-                    //Only want ones that start with an object or an array.
-                    configNode = args[0];
-                    if (configNode[0] === 'object' || configNode[0] === 'array') {
-                        type = call[1];
-                    }
-                } else if (call[0] === 'name' && call[1] === 'define') {
-                    //A define call.
-                    type = 'define';
-                }
-            }
-        }
-
-        if (type) {
-            return onMatch(type);
-        }
-
-        return false;
-    };
-
-    /**
-     * Determines if a specific node is a valid require/requirejs config
-     * call. That includes calls to require/requirejs.config().
-     * @param {Array} node
-     * @param {Function} onMatch a function to call when a match is found.
-     * It is passed the match name, and the config, name, deps possible args.
-     * The config, name and deps args are not normalized.
-     *
-     * @returns {String} a JS source string with the valid require/define call.
-     * Otherwise null.
-     */
-    parse.parseConfigNode = function (node, onMatch) {
-        var call, configNode, args;
-
-        if (!isArray(node)) {
-            return false;
-        }
-
-        if (node[0] === 'call') {
-            call = node[1];
-            args = node[2];
-
-            if (call) {
-                //A require.config() or requirejs.config() call.
-                if ((call[0] === 'dot' &&
-                   (call[1] && call[1][0] === 'name' &&
-                    (call[1][1] === 'require' || call[1][1] === 'requirejs')) &&
-                   call[2] === 'config') ||
-                   //A require() or requirejs() config call.
-
-                   (call[0] === 'name' &&
-                   (call[1] === 'require' || call[1] === 'requirejs'))
-                ) {
-                    //It is a plain require() call.
-                    configNode = args[0];
-
-                    if (configNode[0] !== 'object') {
-                        return null;
-                    }
-
-                    return onMatch(configNode);
-
-                }
-            }
-        }
-
-        return false;
-    };
-
-    /**
-     * Converts an AST node into a JS source string. Does not maintain formatting
-     * or even comments from original source, just returns valid JS source.
-     * @param {Array} node
+     * Converts an AST node into a JS source string by extracting
+     * the node's location from the given contents string. Assumes
+     * esprima.parse() with ranges was done.
+     * @param {String} contents
+     * @param {Object} node
      * @returns {String} a JS source string.
      */
-    parse.nodeToString = function (node) {
-        return processor.gen_code(node, true);
+    parse.nodeToString = function (contents, node) {
+        var range = node.range;
+        return contents.substring(range[0], range[1]);
     };
 
     /**
@@ -12422,12 +12338,13 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
      * @returns {String} a string of license comments.
      */
     parse.getLicenseComments = function (fileName, contents) {
-        var ast = esprima.parse(contents, {
+        var commentNode, refNode, subNode, value, i, j,
+            ast = esprima.parse(contents, {
                 comment: true
             }),
             result = '',
-            lineEnd = contents.indexOf('\r') === -1 ? '\n' : '\r\n',
-            commentNode, refNode, subNode, value, i, j;
+            existsMap = {},
+            lineEnd = contents.indexOf('\r') === -1 ? '\n' : '\r\n';
 
         if (ast.comments) {
             for (i = 0; i < ast.comments.length; i++) {
@@ -12440,12 +12357,13 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
                     if (i + 1 >= ast.comments.length) {
                         value += lineEnd;
                     } else {
-                        //Look for immediately adjacent single line comments since
-                        //it could from a multiple line comment made out of single
-                        //line comments. Like this comment.
+                        //Look for immediately adjacent single line comments
+                        //since it could from a multiple line comment made out
+                        //of single line comments. Like this comment.
                         for (j = i + 1; j < ast.comments.length; j++) {
                             subNode = ast.comments[j];
-                            if (subNode.type === 'Line' && subNode.range[0] === refNode.range[1]) {
+                            if (subNode.type === 'Line' &&
+                                    subNode.range[0] === refNode.range[1]) {
                                 //Adjacent single line comment. Collect it.
                                 value += '//' + subNode.value + lineEnd;
                                 refNode = subNode;
@@ -12462,12 +12380,14 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
                     value = '/*' + commentNode.value + '*/' + lineEnd + lineEnd;
                 }
 
-                if (value.indexOf('license') !== -1 ||
-                    (commentNode.type === 'Block' && value.indexOf('/*!') === 0) ||
-                    value.indexOf('opyright') !== -1 ||
-                    value.indexOf('(c)') !== -1) {
+                if (!existsMap[value] && (value.indexOf('license') !== -1 ||
+                        (commentNode.type === 'Block' &&
+                            value.indexOf('/*!') === 0) ||
+                        value.indexOf('opyright') !== -1 ||
+                        value.indexOf('(c)') !== -1)) {
 
                     result += value;
+                    existsMap[value] = true;
                 }
 
             }
@@ -12485,10 +12405,9 @@ define('parse', ['./esprima', './uglifyjs/index'], function (esprima, uglify) {
  */
 
 /*jslint */
+/*global define */
 
-define('transform', [ './esprima', './parse', 'logger', 'lang'],
-function (esprima,     parse,     logger,   lang) {
-
+define('transform', [ './esprima', './parse', 'logger', 'lang'], function (esprima, parse, logger, lang) {
     'use strict';
     var transform;
 
@@ -12496,17 +12415,17 @@ function (esprima,     parse,     logger,   lang) {
         toTransport: function (namespace, moduleName, path, contents, onFound, options) {
             options = options || {};
 
-            var defineRanges = [],
+            var tokens, foundAnon, deps, lastRange, parenCount, inDefine,
+                defineRanges = [],
                 contentInsertion = '',
-                depString = '',
-                tokens, info, deps;
+                depString = '';
 
             try {
                 tokens = esprima.parse(contents, {
-                        tokens: true,
-                        range: true
-                    }).tokens;
-            } catch(e) {
+                    tokens: true,
+                    range: true
+                }).tokens;
+            } catch (e) {
                 logger.trace('toTransport skipping ' + path + ': ' +
                              e.toString());
                 return contents;
@@ -12514,10 +12433,31 @@ function (esprima,     parse,     logger,   lang) {
 
             //Find the define calls and their position in the files.
             tokens.forEach(function (token, i) {
-                var namespaceExists = false,
-                    prev, prev2, next, next2, next3, next4,
+                var prev, prev2, next, next2, next3, next4,
                     needsId, depAction, nameCommaRange, foundId,
-                    sourceUrlData;
+                    sourceUrlData,
+                    namespaceExists = false;
+
+                if (inDefine && token.type === 'Punctuator') {
+                    //Looking for the end of the define call.
+                    if (token.value === '(') {
+                        parenCount += 1;
+                    } else if (token.value === ')') {
+                        parenCount -= 1;
+                    }
+
+                    if (parenCount === 0) {
+                        inDefine = false;
+
+                        //Found the end of the define call. Hold onto
+                        //it.
+                        lastRange = defineRanges.length &&
+                            defineRanges[defineRanges.length - 1];
+                        if (lastRange) {
+                            lastRange.defineEndRange = token.range;
+                        }
+                    }
+                }
 
                 if (token.type === 'Identifier' && token.value === 'define') {
                     //Possible match. Do not want something.define calls
@@ -12526,7 +12466,7 @@ function (esprima,     parse,     logger,   lang) {
                     next = tokens[i + 1];
 
                     if (prev && prev.type === 'Punctuator' &&
-                        prev.value === '.') {
+                            prev.value === '.') {
                         //a define on a sub-object, not a top level
                         //define() call. If the sub object is the
                         //namespace, then it is ok.
@@ -12537,15 +12477,15 @@ function (esprima,     parse,     logger,   lang) {
 
                         //If the prev2 does not match namespace, then bail.
                         if (!namespace || prev2.type !== 'Identifier' ||
-                            prev2.value !== namespace) {
-                           return;
+                                prev2.value !== namespace) {
+                            return;
                         } else if (namespace) {
                             namespaceExists = true;
                         }
                     }
 
                     if (!next || next.type !== 'Punctuator' ||
-                        next.value !== '(') {
+                            next.value !== '(') {
                        //Not a define() function call. Bail.
                         return;
                     }
@@ -12556,13 +12496,12 @@ function (esprima,     parse,     logger,   lang) {
                     }
 
                     //Figure out if this needs a named define call.
-                    if (next2.type === 'Punctuator' &&
-                        next2.value === '[') {
+                    if (next2.type === 'Punctuator' && next2.value === '[') {
                         //Dependency array
                         needsId = true;
                         depAction = 'skip';
                     } else if (next2.type === 'Punctuator' &&
-                               next2.value === '{') {
+                            next2.value === '{') {
                         //Object literal
                         needsId = true;
                         depAction = 'skip';
@@ -12591,9 +12530,9 @@ function (esprima,     parse,     logger,   lang) {
                         }
 
                         if (next3.type === 'Punctuator' &&
-                            next3.value === ',' &&
-                            next4.type === 'Keyword' &&
-                            next4.value === 'function') {
+                                next3.value === ',' &&
+                                next4.type === 'Keyword' &&
+                                next4.value === 'function') {
                             depAction = 'scan';
                             nameCommaRange = next3.range;
                         } else {
@@ -12606,7 +12545,7 @@ function (esprima,     parse,     logger,   lang) {
                             return;
                         }
                         if (next3.type === 'Punctuator' &&
-                            next3.value === ')') {
+                                next3.value === ')') {
                             needsId = true;
                             depAction = 'empty';
                         } else {
@@ -12619,7 +12558,7 @@ function (esprima,     parse,     logger,   lang) {
                             return;
                         }
                         if (next3.type === 'Punctuator' &&
-                            next3.value === ')') {
+                                next3.value === ')') {
                             needsId = true;
                             depAction = 'skip';
                         } else {
@@ -12638,7 +12577,7 @@ function (esprima,     parse,     logger,   lang) {
                                 return;
                             }
                             if (next4.type === 'Punctuator' &&
-                                next4.value === ')') {
+                                    next4.value === ')') {
                                 needsId = true;
                                 depAction = 'skip';
                             } else {
@@ -12651,6 +12590,11 @@ function (esprima,     parse,     logger,   lang) {
                         //Not a match, skip it.
                         return;
                     }
+
+                    //A valid define call. Need to find the end, start counting
+                    //parentheses.
+                    inDefine = true;
+                    parenCount = 0;
 
                     defineRanges.push({
                         foundId: foundId,
@@ -12665,77 +12609,88 @@ function (esprima,     parse,     logger,   lang) {
                 }
             });
 
-            //Only do naming and dependency injection if there is one define
-            //call in the file.
-            if (defineRanges.length > 1) {
-                return contents;
-            }
             if (!defineRanges.length) {
                 return contents;
             }
 
-            info = defineRanges[0];
-
-            //Do the modifications "backwards", in other words, start with the
-            //one that is farthest down and work up, so that the ranges in the
-            //defineRanges still apply. So that means deps, id, then namespace.
-
-            if (info.needsId && moduleName) {
-                contentInsertion += "'" + moduleName + "',";
-            }
-
-            if (info.depAction === 'scan') {
-                deps = parse.getAnonDeps(path, contents);
-
-                if (deps.length) {
-                    depString = '[' + deps.map(function (dep) {
-                        return "'" + dep + "'";
-                    }) + ']';
-                } else {
-                    depString = '[]';
+            //Find the first anon define, then any that need dependency
+            //scanning.
+            defineRanges = defineRanges.filter(function (range) {
+                if (!foundAnon && range.needsId) {
+                    foundAnon = true;
+                    return true;
+                } else if (range.depAction === 'scan') {
+                    return true;
                 }
-                depString +=  ',';
+            });
 
-                if (info.nameCommaRange) {
-                    //Already have a named module, need to insert the
-                    //dependencies after the name.
-                    contents = contents.substring(0, info.nameCommaRange[1]) +
-                               depString +
-                               contents.substring(info.nameCommaRange[1],
-                                              contents.length);
-                } else {
-                    contentInsertion +=  depString;
+            //Reverse the matches, need to start from the bottom of
+            //the file to modify it, so that the ranges are still true
+            //further up.
+            defineRanges.reverse();
+
+            defineRanges.forEach(function (info) {
+                //Do the modifications "backwards", in other words, start with the
+                //one that is farthest down and work up, so that the ranges in the
+                //defineRanges still apply. So that means deps, id, then namespace.
+
+                if (info.needsId && moduleName) {
+                    contentInsertion += "'" + moduleName + "',";
                 }
-            } else if (info.depAction === 'empty') {
-                contentInsertion += '[],';
-            }
 
-            if (contentInsertion) {
-                contents = contents.substring(0, info.parenRange[1]) +
-                           contentInsertion +
-                           contents.substring(info.parenRange[1],
-                                              contents.length);
-            }
+                if (info.depAction === 'scan') {
+                    deps = parse.getAnonDeps(path, contents.substring(info.defineRange[0], info.defineEndRange[1]));
 
-            //Do namespace last so that ui does not mess upthe parenRange
-            //used above.
-            if (namespace && !info.namespaceExists) {
-                contents = contents.substring(0, info.defineRange[0]) +
-                           namespace + '.' +
-                           contents.substring(info.defineRange[0],
-                                              contents.length);
-            }
+                    if (deps.length) {
+                        depString = '[' + deps.map(function (dep) {
+                            return "'" + dep + "'";
+                        }) + ']';
+                    } else {
+                        depString = '[]';
+                    }
+                    depString +=  ',';
 
+                    if (info.nameCommaRange) {
+                        //Already have a named module, need to insert the
+                        //dependencies after the name.
+                        contents = contents.substring(0, info.nameCommaRange[1]) +
+                                   depString +
+                                   contents.substring(info.nameCommaRange[1],
+                                                  contents.length);
+                    } else {
+                        contentInsertion +=  depString;
+                    }
+                } else if (info.depAction === 'empty') {
+                    contentInsertion += '[],';
+                }
 
-            //Notify any listener for the found info
-            if (onFound) {
-                onFound(info);
-            }
+                if (contentInsertion) {
+                    contents = contents.substring(0, info.parenRange[1]) +
+                               contentInsertion +
+                               contents.substring(info.parenRange[1],
+                                                  contents.length);
+                }
+
+                //Do namespace last so that ui does not mess upthe parenRange
+                //used above.
+                if (namespace && !info.namespaceExists) {
+                    contents = contents.substring(0, info.defineRange[0]) +
+                               namespace + '.' +
+                               contents.substring(info.defineRange[0],
+                                                  contents.length);
+                }
+
+                //Notify any listener for the found info
+                if (onFound) {
+                    onFound(info);
+                }
+            });
 
             if (options.useSourceUrl) {
                 contents = 'eval("' + lang.jsEscape(contents) +
-                '\\n//@ sourceURL=' + (path.indexOf('/') === 0 ? '' : '/') + path +
-                '");\n';
+                    '\\n//@ sourceURL=' + (path.indexOf('/') === 0 ? '' : '/') +
+                    path +
+                    '");\n';
             }
 
             return contents;
@@ -13462,7 +13417,9 @@ function (lang,   logger,   envOptimize,        file,           parse,
 
                 try {
                     ast = parser.parse(fileContents, config.strict_semicolons);
-                    ast = processor.ast_mangle(ast, config);
+                    if (config.no_mangle !== true) {
+                        ast = processor.ast_mangle(ast, config);
+                    }
                     ast = processor.ast_squeeze(ast, config);
 
                     fileContents = processor.gen_code(ast, config);
@@ -13517,7 +13474,13 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
         var layer,
             pluginBuilderRegExp = /(["']?)pluginBuilder(["']?)\s*[=\:]\s*["']([^'"\s]+)["']/,
             oldNewContext = require.s.newContext,
-            oldDef;
+            oldDef,
+
+            //create local undefined values for module and exports,
+            //so that when files are evaled in this function they do not
+            //see the node values used for r.js
+            exports,
+            module;
 
         //Stored cached file contents for reuse in other layers.
         require._cachedFileContents = {};
@@ -13539,7 +13502,9 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
                 return true;
             } else {
                 if (!layer.ignoredUrls[url]) {
-                    logger.info('Cannot optimize network URL, skipping: ' + url);
+                    if (url.indexOf('empty:') === -1) {
+                        logger.info('Cannot optimize network URL, skipping: ' + url);
+                    }
                     layer.ignoredUrls[url] = true;
                 }
                 return false;
@@ -13567,6 +13532,7 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
                 context.needFullExec = {};
                 context.fullExec = {};
                 context.plugins = {};
+                context.buildShimExports = {};
 
                 //Override the shim exports function generator to just
                 //spit out strings that can be used in the stringified
@@ -13581,6 +13547,7 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
                             '    }\n' +
                             '}(this))';
                         };
+                        result.exports = exports;
                     } else {
                         result = function () {
                             return '(function (global) {\n' +
@@ -13619,7 +13586,8 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
                 //Override load so that the file paths can be collected.
                 context.load = function (moduleName, url) {
                     /*jslint evil: true */
-                    var contents, pluginBuilderMatch, builderName;
+                    var contents, pluginBuilderMatch, builderName,
+                        shim, shimExports;
 
                     //Do not mark the url as fetched if it is
                     //not an empty: URL, used by the optimizer.
@@ -13677,7 +13645,7 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
                                         layer.existingRequireUrl = url;
                                     }
                                 } catch (e1) {
-                                    throw new Error('Parse error using UglifyJS ' +
+                                    throw new Error('Parse error using esprima ' +
                                                     'for file: ' + url + '\n' + e1);
                                 }
 
@@ -13707,7 +13675,7 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
                                         });
                                     }
                                 } catch (e2) {
-                                    throw new Error('Parse error using UglifyJS ' +
+                                    throw new Error('Parse error using esprima ' +
                                                     'for file: ' + url + '\n' + e2);
                                 }
 
@@ -13718,9 +13686,22 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
                                 eval(contents);
                             }
 
-                            //Need to close out completion of this module
-                            //so that listeners will get notified that it is available.
                             try {
+                                //If have a string shim config, and this is
+                                //a fully executed module, try to see if
+                                //it created a variable in this eval scope
+                                if (context.needFullExec[moduleName]) {
+                                    shim = context.config.shim[moduleName];
+                                    if (shim && shim.exports && shim.exports.exports) {
+                                        shimExports = eval(shim.exports.exports);
+                                        if (typeof shimExports !== 'undefined') {
+                                            context.buildShimExports[moduleName] = shimExports;
+                                        }
+                                    }
+                                }
+
+                                //Need to close out completion of this module
+                                //so that listeners will get notified that it is available.
                                 context.completeLoad(moduleName);
                             } catch (e) {
                                 //Track which module could not complete loading.
@@ -13747,10 +13728,15 @@ function (file,           pragma,   parse,   lang,   logger,   commonJs) {
                 //Marks module has having a name, and optionally executes the
                 //callback, but only if it meets certain criteria.
                 context.execCb = function (name, cb, args, exports) {
-                    if (!layer.needsDefine[name]) {
+                    var buildShimExports = layer.context.buildShimExports[name];
+
+                    if (!layer.needsDefine[name] && !buildShimExports) {
                         layer.modulesWithNames[name] = true;
                     }
-                    if (cb.__requireJsBuild || layer.context.needFullExec[name]) {
+
+                    if (buildShimExports) {
+                        return buildShimExports;
+                    } else if (cb.__requireJsBuild || layer.context.needFullExec[name]) {
                         return cb.apply(exports, args);
                     }
                     return undefined;
@@ -14409,6 +14395,12 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
             });
         }
 
+        //If removeCombined in play, remove any empty directories that
+        //may now exist because of its use
+        if (config.removeCombined && !config.out && config.dir) {
+            file.deleteEmptyDirs(config.dir);
+        }
+
         //Do other optimizations.
         if (config.out && !config.cssIn) {
             //Just need to worry about one JS file.
@@ -14568,7 +14560,8 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
         'hasOnSave.',
         'wrap.',
         'uglify.',
-        'closure.'
+        'closure.',
+        'map.'
     ];
 
     build.hasDotPropMatch = function (prop) {
@@ -14681,16 +14674,6 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
             }
         }
 
-        //Do not allow URLs for paths resources.
-        if (config.paths) {
-            for (prop in config.paths) {
-                if (config.paths.hasOwnProperty(prop)) {
-                    config.paths[prop] = build.makeAbsPath(config.paths[prop],
-                                              (config.baseUrl || absFilePath));
-                }
-            }
-        }
-
         build.makeAbsObject(["out", "cssIn"], config, absFilePath);
         build.makeAbsObject(["startFile", "endFile"], config.wrap, absFilePath);
     };
@@ -14768,10 +14751,6 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
                 buildFileConfig = eval("(" + buildFileContents + ")");
                 build.makeAbsConfig(buildFileConfig, absFilePath);
 
-                if (!buildFileConfig.out && !buildFileConfig.dir) {
-                    buildFileConfig.dir = (buildFileConfig.baseUrl || config.baseUrl) + "/build/";
-                }
-
                 //Mix in the config now so that items in mainConfigFile can
                 //be resolved relative to them if necessary, like if appDir
                 //is set here, but the baseUrl is in mainConfigFile. Will
@@ -14829,6 +14808,17 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
         //args should take precedence over build file values.
         mixConfig(config, cfg);
 
+        //Fix paths to full paths so that they can be adjusted consistently
+        //lately to be in the output area.
+        lang.eachProp(config.paths, function (value, prop) {
+            if (lang.isArray(value)) {
+                throw new Error('paths fallback not supported in optimizer. ' +
+                                'Please provide a build config path override ' +
+                                'for ' + prop);
+            }
+            config.paths[prop] = build.makeAbsPath(value, config.baseUrl);
+        });
+
         //Set final output dir
         if (config.hasOwnProperty("baseUrl")) {
             if (config.appDir) {
@@ -14842,6 +14832,14 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
         }
 
         //Check for errors in config
+        if (config.main) {
+            throw new Error('"main" passed as an option, but the ' +
+                            'supported option is called "name".');
+        }
+        if (!config.name && !config.modules && !config.include && !config.cssIn) {
+            throw new Error('Missing either a "name", "include" or "modules" ' +
+                            'option');
+        }
         if (config.cssIn && !config.out) {
             throw new Error("ERROR: 'out' option missing.");
         }
@@ -14881,6 +14879,7 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
                 {
                     name: config.name,
                     out: config.out,
+                    create: config.create,
                     include: config.include,
                     exclude: config.exclude,
                     excludeShallow: config.excludeShallow,
@@ -14964,6 +14963,8 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
 
         //Remove things that may cause problems in the build.
         delete config.jQuery;
+        delete config.enforceDefine;
+        delete config.urlArgs;
 
         return config;
     };
@@ -15064,7 +15065,7 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
         registry = context.registry;
         for (id in registry) {
             if (registry.hasOwnProperty(id) && id.indexOf('_@r') !== 0) {
-                if (id.indexOf('_unnormalized') === -1) {
+                if (id.indexOf('_unnormalized') === -1 && registry[id].enabled) {
                     errIds.push(id);
                     errUrl = registry[id].map.url;
 
@@ -15135,6 +15136,14 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
      * included in the flattened module text.
      */
     build.flattenModule = function (module, layer, config) {
+
+        //Use override settings, particularly for pragmas
+        //Do this before the var readings since it reads config values.
+        if (module.override) {
+            config = lang.mixin({}, config, true);
+            lang.mixin(config, module.override, true);
+        }
+
         var buildFileContents = "",
             namespace = config.namespace || '',
             namespaceWithDot = namespace ? namespace + '.' : '',
@@ -15143,12 +15152,6 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
             path, reqIndex, fileContents, currContents,
             i, moduleName, shim, packageConfig,
             parts, builder, writeApi;
-
-        //Use override settings, particularly for pragmas
-        if (module.override) {
-            config = lang.mixin({}, config, true);
-            lang.mixin(config, module.override, true);
-        }
 
         //Start build output for the module.
         buildFileContents += "\n" +
@@ -15355,9 +15358,18 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
                 config.logLevel = config.hasOwnProperty('logLevel') ?
                                   config.logLevel : logger.SILENT;
 
+                //Reset build internals first in case this is part
+                //of a long-running server process that could have
+                //exceptioned out in a bad state. It is only defined
+                //after the first call though.
+                if (requirejs._buildReset) {
+                    requirejs._buildReset();
+                }
+
                 var result = build(config);
 
-                //Reset build internals on each run.
+                //And clean up, in case something else triggers
+                //a build in another pathway.
                 requirejs._buildReset();
 
                 if (callback) {
