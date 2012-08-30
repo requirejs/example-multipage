@@ -9,6 +9,11 @@ the following goals:
 layer, and the page-specific modules should be in a page-specific layer.
 * The HTML page should not have to be changed after doing the build.
 
+**If you want to use [shim config](http://requirejs.org/docs/api.html#config-shim)**, for instance to load Backbone, see
+the [requirejs/example-multipage-shim](https://github.com/requirejs/example-multipage-shim)
+example instead. This project will not work well with shim config. This project works
+best when all the dependencies are AMD modules.
+
 ## Getting this project template
 
 If you are using [volo](https://github.com/volojs/volo):
