@@ -1,5 +1,5 @@
 /**
- * @license r.js 2.1.4 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
+ * @license r.js 2.1.5 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -14,19 +14,20 @@
 /*jslint evil: true, nomen: true, sloppy: true */
 /*global readFile: true, process: false, Packages: false, print: false,
 console: false, java: false, module: false, requirejsVars, navigator,
-document, importScripts, self, location */
+document, importScripts, self, location, Components, FileUtils */
 
-var requirejs, require, define;
+var requirejs, require, define, xpcUtil;
 (function (console, args, readFileFunc) {
-
     var fileName, env, fs, vm, path, exec, rhinoContext, dir, nodeRequire,
-        nodeDefine, exists, reqMain, loadedOptimizedLib, existsForNode,
-        version = '2.1.4',
+        nodeDefine, exists, reqMain, loadedOptimizedLib, existsForNode, Cc, Ci,
+        version = '2.1.5',
         jsSuffixRegExp = /\.js$/,
         commandOption = '',
         useLibLoaded = {},
         //Used by jslib/rhino/args.js
         rhinoArgs = args,
+        //Used by jslib/xpconnect/args.js
+        xpconnectArgs = args,
         readFile = typeof readFileFunc !== 'undefined' ? readFileFunc : null;
 
     function showHelp() {
@@ -41,11 +42,11 @@ var requirejs, require, define;
             return fs.readFileSync(path, 'utf8');
         };
 
-        exec = function (string, name) {
+        exec = function (string) {
             return eval(string);
         };
 
-        exists = function (fileName) {
+        exists = function () {
             console.log('x.js exists not applicable in browser env');
             return false;
         };
@@ -120,10 +121,118 @@ var requirejs, require, define;
             commandOption = fileName.substring(1);
             fileName = process.argv[3];
         }
+    } else if (typeof Components !== 'undefined' && Components.classes && Components.interfaces) {
+        env = 'xpconnect';
+
+        Components.utils['import']('resource://gre/modules/FileUtils.jsm');
+        Cc = Components.classes;
+        Ci = Components.interfaces;
+
+        fileName = args[0];
+
+        if (fileName && fileName.indexOf('-') === 0) {
+            commandOption = fileName.substring(1);
+            fileName = args[1];
+        }
+
+        xpcUtil = {
+            cwd: function () {
+                return FileUtils.getFile("CurWorkD", []).path;
+            },
+
+            //Remove . and .. from paths, normalize on front slashes
+            normalize: function (path) {
+                //There has to be an easier way to do this.
+                var i, part, ary,
+                    firstChar = path.charAt(0);
+
+                if (firstChar !== '/' &&
+                        firstChar !== '\\' &&
+                        path.indexOf(':') === -1) {
+                    //A relative path. Use the current working directory.
+                    path = xpcUtil.cwd() + '/' + path;
+                }
+
+                ary = path.replace(/\\/g, '/').split('/');
+
+                for (i = 0; i < ary.length; i += 1) {
+                    part = ary[i];
+                    if (part === '.') {
+                        ary.splice(i, 1);
+                        i -= 1;
+                    } else if (part === '..') {
+                        ary.splice(i - 1, 2);
+                        i -= 2;
+                    }
+                }
+                return ary.join('/');
+            },
+
+            xpfile: function (path) {
+                try {
+                    return new FileUtils.File(xpcUtil.normalize(path));
+                } catch (e) {
+                    throw new Error(path + ' failed: ' + e);
+                }
+            },
+
+            readFile: function (/*String*/path, /*String?*/encoding) {
+                //A file read function that can deal with BOMs
+                encoding = encoding || "utf-8";
+
+                var inStream, convertStream,
+                    readData = {},
+                    fileObj = xpcUtil.xpfile(path);
+
+                //XPCOM, you so crazy
+                try {
+                    inStream = Cc['@mozilla.org/network/file-input-stream;1']
+                               .createInstance(Ci.nsIFileInputStream);
+                    inStream.init(fileObj, 1, 0, false);
+
+                    convertStream = Cc['@mozilla.org/intl/converter-input-stream;1']
+                                    .createInstance(Ci.nsIConverterInputStream);
+                    convertStream.init(inStream, encoding, inStream.available(),
+                    Ci.nsIConverterInputStream.DEFAULT_REPLACEMENT_CHARACTER);
+
+                    convertStream.readString(inStream.available(), readData);
+                    return readData.value;
+                } catch (e) {
+                    throw new Error((fileObj && fileObj.path || '') + ': ' + e);
+                } finally {
+                    if (convertStream) {
+                        convertStream.close();
+                    }
+                    if (inStream) {
+                        inStream.close();
+                    }
+                }
+            }
+        };
+
+        readFile = xpcUtil.readFile;
+
+        exec = function (string) {
+            return eval(string);
+        };
+
+        exists = function (fileName) {
+            return xpcUtil.xpfile(fileName).exists();
+        };
+
+        //Define a console.log for easier logging. Don't
+        //get fancy though.
+        if (typeof console === 'undefined') {
+            console = {
+                log: function () {
+                    print.apply(undefined, arguments);
+                }
+            };
+        }
     }
 
     /** vim: et:ts=4:sw=4:sts=4
- * @license RequireJS 2.1.4 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS 2.1.5 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -136,7 +245,7 @@ var requirejs, require, define;
 (function (global) {
     var req, s, head, baseElement, dataMain, src,
         interactiveScript, currentlyAddingScript, mainScript, subPath,
-        version = '2.1.4',
+        version = '2.1.5',
         commentRegExp = /(\/\*([\s\S]*?)\*\/|([^:]|^)\/\/(.*)$)/mg,
         cjsRequireRegExp = /[^.]\s*require\s*\(\s*["']([^'"\s]+)["']\s*\)/g,
         jsSuffixRegExp = /\.js$/,
@@ -315,15 +424,21 @@ var requirejs, require, define;
         var inCheckLoaded, Module, context, handlers,
             checkLoadedTimeoutId,
             config = {
+                //Defaults. Do not set a default for map
+                //config to speed up normalize(), which
+                //will run faster if there is no default.
                 waitSeconds: 7,
                 baseUrl: './',
                 paths: {},
                 pkgs: {},
                 shim: {},
-                map: {},
                 config: {}
             },
             registry = {},
+            //registry of just enabled modules, to speed
+            //cycle breaking code when lots of modules
+            //are registered, but not activated.
+            enabledRegistry = {},
             undefEvents = {},
             defQueue = [],
             defined = {},
@@ -419,7 +534,7 @@ var requirejs, require, define;
             }
 
             //Apply map config if available.
-            if (applyMap && (baseParts || starMap) && map) {
+            if (applyMap && map && (baseParts || starMap)) {
                 nameParts = name.split('/');
 
                 for (i = nameParts.length; i > 0; i -= 1) {
@@ -700,6 +815,7 @@ var requirejs, require, define;
         function cleanRegistry(id) {
             //Clean up machinery used for waiting modules.
             delete registry[id];
+            delete enabledRegistry[id];
         }
 
         function breakCycle(mod, traced, processed) {
@@ -748,7 +864,7 @@ var requirejs, require, define;
             inCheckLoaded = true;
 
             //Figure out the state of all the modules.
-            eachProp(registry, function (mod) {
+            eachProp(enabledRegistry, function (mod) {
                 map = mod.map;
                 modId = map.id;
 
@@ -929,7 +1045,7 @@ var requirejs, require, define;
             },
 
             /**
-             * Checks is the module is ready to define itself, and if so,
+             * Checks if the module is ready to define itself, and if so,
              * define it.
              */
             check: function () {
@@ -1007,7 +1123,7 @@ var requirejs, require, define;
                         }
 
                         //Clean up
-                        delete registry[id];
+                        cleanRegistry(id);
 
                         this.defined = true;
                     }
@@ -1173,6 +1289,7 @@ var requirejs, require, define;
             },
 
             enable: function () {
+                enabledRegistry[this.map.id] = this;
                 this.enabled = true;
 
                 //Set flag mentioning that the module is enabling,
@@ -1332,6 +1449,7 @@ var requirejs, require, define;
             Module: Module,
             makeModuleMap: makeModuleMap,
             nextTick: req.nextTick,
+            onError: onError,
 
             /**
              * Set a configuration for the context.
@@ -1358,6 +1476,9 @@ var requirejs, require, define;
                 eachProp(cfg, function (value, prop) {
                     if (objs[prop]) {
                         if (prop === 'map') {
+                            if (!config.map) {
+                                config.map = {};
+                            }
                             mixin(config[prop], value, true, true);
                         } else {
                             mixin(config[prop], value, true);
@@ -1469,7 +1590,7 @@ var requirejs, require, define;
                         //Synchronous access to one module. If require.get is
                         //available (as in the Node adapter), prefer that.
                         if (req.get) {
-                            return req.get(context, deps, relMap);
+                            return req.get(context, deps, relMap, localRequire);
                         }
 
                         //Normalize module name, if it contains . or ..
@@ -1520,7 +1641,7 @@ var requirejs, require, define;
                      * plain URLs like nameToUrl.
                      */
                     toUrl: function (moduleNamePlusExt) {
-                        var ext, url,
+                        var ext,
                             index = moduleNamePlusExt.lastIndexOf('.'),
                             segment = moduleNamePlusExt.split('/')[0],
                             isRelative = segment === '.' || segment === '..';
@@ -1532,9 +1653,8 @@ var requirejs, require, define;
                             moduleNamePlusExt = moduleNamePlusExt.substring(0, index);
                         }
 
-                        url = context.nameToUrl(normalize(moduleNamePlusExt,
-                                                relMap && relMap.id, true), ext || '.fake');
-                        return ext ? url : url.substring(0, url.length - 5);
+                        return context.nameToUrl(normalize(moduleNamePlusExt,
+                                                relMap && relMap.id, true), ext,  true);
                     },
 
                     defined: function (id) {
@@ -1653,7 +1773,7 @@ var requirejs, require, define;
              * it is assumed to have already been normalized. This is an
              * internal API, not a public one. Use toUrl for the public API.
              */
-            nameToUrl: function (moduleName, ext) {
+            nameToUrl: function (moduleName, ext, skipExt) {
                 var paths, pkgs, pkg, pkgPath, syms, i, parentModule, url,
                     parentPath;
 
@@ -1702,7 +1822,7 @@ var requirejs, require, define;
 
                     //Join the path parts together, then figure out if baseUrl is needed.
                     url = syms.join('/');
-                    url += (ext || (/\?/.test(url) ? '' : '.js'));
+                    url += (ext || (/\?/.test(url) || skipExt ? '' : '.js'));
                     url = (url.charAt(0) === '/' || url.match(/^[\w\+\.\-]+:/) ? '' : config.baseUrl) + url;
                 }
 
@@ -1941,7 +2061,7 @@ var requirejs, require, define;
                 node.attachEvent('onreadystatechange', context.onScriptLoad);
                 //It would be great to add an error handler here to catch
                 //404s in IE9+. However, onreadystatechange will fire before
-                //the error handler, so that does not help. If addEvenListener
+                //the error handler, so that does not help. If addEventListener
                 //is used, then IE will fire error before load, but we cannot
                 //use that pathway given the connect.microsoft.com issue
                 //mentioned above about not doing the 'script execute,
@@ -1970,16 +2090,24 @@ var requirejs, require, define;
 
             return node;
         } else if (isWebWorker) {
-            //In a web worker, use importScripts. This is not a very
-            //efficient use of importScripts, importScripts will block until
-            //its script is downloaded and evaluated. However, if web workers
-            //are in play, the expectation that a build has been done so that
-            //only one script needs to be loaded anyway. This may need to be
-            //reevaluated if other use cases become common.
-            importScripts(url);
+            try {
+                //In a web worker, use importScripts. This is not a very
+                //efficient use of importScripts, importScripts will block until
+                //its script is downloaded and evaluated. However, if web workers
+                //are in play, the expectation that a build has been done so that
+                //only one script needs to be loaded anyway. This may need to be
+                //reevaluated if other use cases become common.
+                importScripts(url);
 
-            //Account for anonymous modules
-            context.completeLoad(moduleName);
+                //Account for anonymous modules
+                context.completeLoad(moduleName);
+            } catch (e) {
+                context.onError(makeError('importscripts',
+                                'importScripts failed for ' +
+                                    moduleName + ' at ' + url,
+                                e,
+                                [moduleName]));
+            }
         }
     };
 
@@ -2124,6 +2252,13 @@ var requirejs, require, define;
 }(this));
 
 
+
+    this.requirejsVars = {
+        require: require,
+        requirejs: require,
+        define: define
+    };
+
     if (env === 'browser') {
         /**
  * @license RequireJS rhino Copyright (c) 2012, The Dojo Foundation All Rights Reserved.
@@ -2175,12 +2310,7 @@ var requirejs, require, define;
 
 }());
     } else if (env === 'node') {
-        this.requirejsVars = {
-            require: require,
-            requirejs: require,
-            define: define,
-            nodeRequire: nodeRequire
-        };
+        this.requirejsVars.nodeRequire = nodeRequire;
         require.nodeRequire = nodeRequire;
 
         /**
@@ -2221,13 +2351,13 @@ var requirejs, require, define;
     }
 
     //Supply an implementation that allows synchronous get of a module.
-    req.get = function (context, moduleName, relModuleMap) {
+    req.get = function (context, moduleName, relModuleMap, localRequire) {
         if (moduleName === "require" || moduleName === "exports" || moduleName === "module") {
             req.onError(new Error("Explicit require of " + moduleName + " is not allowed."));
         }
 
         var ret, oldTick,
-            moduleMap = context.makeModuleMap(moduleName, relModuleMap);
+            moduleMap = context.makeModuleMap(moduleName, relModuleMap, false, true);
 
         //Normalize module name, if it contains . or ..
         moduleName = moduleMap.id;
@@ -2244,24 +2374,26 @@ var requirejs, require, define;
                         //A plugin, call requirejs to handle it. Now that
                         //nextTick is syncTick, the require will complete
                         //synchronously.
-                        context.require([moduleMap.originalName]);
+                        localRequire([moduleMap.originalName]);
 
                         //Now that plugin is loaded, can regenerate the moduleMap
                         //to get the final, normalized ID.
-                        moduleMap = context.makeModuleMap(moduleMap.originalName, relModuleMap);
-
-                        //The above calls are sync, so can do the next thing safely.
-                        ret = context.defined[moduleMap.id];
+                        moduleMap = context.makeModuleMap(moduleMap.originalName, relModuleMap, false, true);
+                        moduleName = moduleMap.id;
                     } else {
                         //Try to dynamically fetch it.
                         req.load(context, moduleName, moduleMap.url);
 
                         //Enable the module
                         context.enable(moduleMap, relModuleMap);
-
-                        //The above calls are sync, so can do the next thing safely.
-                        ret = context.defined[moduleName];
                     }
+
+                    //Break any cycles by requiring it normally, but this will
+                    //finish synchronously
+                    require([moduleName]);
+
+                    //The above calls are sync, so can do the next thing safely.
+                    ret = context.defined[moduleName];
                 } finally {
                     context.nextTick = oldTick;
                 }
@@ -2332,6 +2464,28 @@ var requirejs, require, define;
     };
 }());
 
+    } else if (env === 'xpconnect') {
+        /**
+ * @license RequireJS xpconnect Copyright (c) 2013, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint */
+/*global require, load */
+
+(function () {
+    'use strict';
+    require.load = function (context, moduleName, url) {
+
+        load(url);
+
+        //Support anonymous modules.
+        context.completeLoad(moduleName);
+    };
+
+}());
+
     }
 
     //Support a default file name to execute. Useful for hosted envs
@@ -2371,9 +2525,15 @@ var requirejs, require, define;
     } else if ((typeof navigator !== 'undefined' && typeof document !== 'undefined') ||
             (typeof importScripts !== 'undefined' && typeof self !== 'undefined')) {
         env = 'browser';
+    } else if (typeof Components !== 'undefined' && Components.classes && Components.interfaces) {
+        env = 'xpconnect';
     }
 
     define('env', {
+        get: function () {
+            return env;
+        },
+
         load: function (name, req, load, config) {
             //Allow override in the config.
             if (config.env) {
@@ -2784,6 +2944,23 @@ define('rhino/assert', function () {
 
 }
 
+if(env === 'xpconnect') {
+/**
+ * @license RequireJS Copyright (c) 2013, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint strict: false */
+/*global define: false, load: false */
+
+//Just a stub for use with uglify's consolidator.js
+define('xpconnect/assert', function () {
+    return {};
+});
+
+}
+
 if(env === 'browser') {
 /**
  * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
@@ -2840,7 +3017,32 @@ var jsLibRhinoArgs = (typeof rhinoArgs !== 'undefined' && rhinoArgs) || [].conca
 define('rhino/args', function () {
     var args = jsLibRhinoArgs;
 
-    //Ignore any command option used for rq.js
+    //Ignore any command option used for r.js
+    if (args[0] && args[0].indexOf('-' === 0)) {
+        args = args.slice(1);
+    }
+
+    return args;
+});
+
+}
+
+if(env === 'xpconnect') {
+/**
+ * @license Copyright (c) 2013, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint strict: false */
+/*global define, xpconnectArgs */
+
+var jsLibXpConnectArgs = (typeof xpconnectArgs !== 'undefined' && xpconnectArgs) || [].concat(Array.prototype.slice.call(arguments, 0));
+
+define('xpconnect/args', function () {
+    var args = jsLibXpConnectArgs;
+
+    //Ignore any command option used for r.js
     if (args[0] && args[0].indexOf('-' === 0)) {
         args = args.slice(1);
     }
@@ -2902,6 +3104,22 @@ if(env === 'rhino') {
 /*global define: false, load: false */
 
 define('rhino/load', function () {
+    return load;
+});
+
+}
+
+if(env === 'xpconnect') {
+/**
+ * @license RequireJS Copyright (c) 2013, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint strict: false */
+/*global define: false, load: false */
+
+define('xpconnect/load', function () {
     return load;
 });
 
@@ -3689,6 +3907,268 @@ define('rhino/file', ['prim'], function (prim) {
 
 }
 
+if(env === 'xpconnect') {
+/**
+ * @license RequireJS Copyright (c) 2013, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+//Helper functions to deal with file I/O.
+
+/*jslint plusplus: false */
+/*global define, Components, xpcUtil */
+
+define('xpconnect/file', ['prim'], function (prim) {
+    var file,
+        Cc = Components.classes,
+        Ci = Components.interfaces,
+        //Depends on xpcUtil which is set up in x.js
+        xpfile = xpcUtil.xpfile;
+
+    function mkFullDir(dirObj) {
+        //1 is DIRECTORY_TYPE, 511 is 0777 permissions
+        if (!dirObj.exists()) {
+            dirObj.create(1, 511);
+        }
+    }
+
+    file = {
+        backSlashRegExp: /\\/g,
+
+        exclusionRegExp: /^\./,
+
+        getLineSeparator: function () {
+            return file.lineSeparator;
+        },
+
+        lineSeparator: ('@mozilla.org/windows-registry-key;1' in Cc) ?
+                        '\r\n' : '\n',
+
+        exists: function (fileName) {
+            return xpfile(fileName).exists();
+        },
+
+        parent: function (fileName) {
+            return xpfile(fileName).parent;
+        },
+
+        normalize: function (fileName) {
+            return file.absPath(fileName);
+        },
+
+        isFile: function (path) {
+            return xpfile(path).isFile();
+        },
+
+        isDirectory: function (path) {
+            return xpfile(path).isDirectory();
+        },
+
+        /**
+         * Gets the absolute file path as a string, normalized
+         * to using front slashes for path separators.
+         * @param {java.io.File||String} file
+         */
+        absPath: function (fileObj) {
+            if (typeof fileObj === "string") {
+                fileObj = xpfile(fileObj);
+            }
+            return fileObj.path;
+        },
+
+        getFilteredFileList: function (/*String*/startDir, /*RegExp*/regExpFilters, /*boolean?*/makeUnixPaths, /*boolean?*/startDirIsObject) {
+            //summary: Recurses startDir and finds matches to the files that match regExpFilters.include
+            //and do not match regExpFilters.exclude. Or just one regexp can be passed in for regExpFilters,
+            //and it will be treated as the "include" case.
+            //Ignores files/directories that start with a period (.) unless exclusionRegExp
+            //is set to another value.
+            var files = [], topDir, regExpInclude, regExpExclude, dirFileArray,
+                fileObj, filePath, ok, dirFiles;
+
+            topDir = startDir;
+            if (!startDirIsObject) {
+                topDir = xpfile(startDir);
+            }
+
+            regExpInclude = regExpFilters.include || regExpFilters;
+            regExpExclude = regExpFilters.exclude || null;
+
+            if (topDir.exists()) {
+                dirFileArray = topDir.directoryEntries;
+                while (dirFileArray.hasMoreElements()) {
+                    fileObj = dirFileArray.getNext().QueryInterface(Ci.nsILocalFile);
+                    if (fileObj.isFile()) {
+                        filePath = fileObj.path;
+                        if (makeUnixPaths) {
+                            if (filePath.indexOf("/") === -1) {
+                                filePath = filePath.replace(/\\/g, "/");
+                            }
+                        }
+
+                        ok = true;
+                        if (regExpInclude) {
+                            ok = filePath.match(regExpInclude);
+                        }
+                        if (ok && regExpExclude) {
+                            ok = !filePath.match(regExpExclude);
+                        }
+
+                        if (ok && (!file.exclusionRegExp ||
+                            !file.exclusionRegExp.test(fileObj.leafName))) {
+                            files.push(filePath);
+                        }
+                    } else if (fileObj.isDirectory() &&
+                              (!file.exclusionRegExp || !file.exclusionRegExp.test(fileObj.leafName))) {
+                        dirFiles = this.getFilteredFileList(fileObj, regExpFilters, makeUnixPaths, true);
+                        files.push.apply(files, dirFiles);
+                    }
+                }
+            }
+
+            return files; //Array
+        },
+
+        copyDir: function (/*String*/srcDir, /*String*/destDir, /*RegExp?*/regExpFilter, /*boolean?*/onlyCopyNew) {
+            //summary: copies files from srcDir to destDir using the regExpFilter to determine if the
+            //file should be copied. Returns a list file name strings of the destinations that were copied.
+            regExpFilter = regExpFilter || /\w/;
+
+            var fileNames = file.getFilteredFileList(srcDir, regExpFilter, true),
+            copiedFiles = [], i, srcFileName, destFileName;
+
+            for (i = 0; i < fileNames.length; i += 1) {
+                srcFileName = fileNames[i];
+                destFileName = srcFileName.replace(srcDir, destDir);
+
+                if (file.copyFile(srcFileName, destFileName, onlyCopyNew)) {
+                    copiedFiles.push(destFileName);
+                }
+            }
+
+            return copiedFiles.length ? copiedFiles : null; //Array or null
+        },
+
+        copyFile: function (/*String*/srcFileName, /*String*/destFileName, /*boolean?*/onlyCopyNew) {
+            //summary: copies srcFileName to destFileName. If onlyCopyNew is set, it only copies the file if
+            //srcFileName is newer than destFileName. Returns a boolean indicating if the copy occurred.
+            var destFile = xpfile(destFileName),
+            srcFile = xpfile(srcFileName);
+
+            //logger.trace("Src filename: " + srcFileName);
+            //logger.trace("Dest filename: " + destFileName);
+
+            //If onlyCopyNew is true, then compare dates and only copy if the src is newer
+            //than dest.
+            if (onlyCopyNew) {
+                if (destFile.exists() && destFile.lastModifiedTime >= srcFile.lastModifiedTime) {
+                    return false; //Boolean
+                }
+            }
+
+            srcFile.copyTo(destFile.parent, destFile.leafName);
+
+            return true; //Boolean
+        },
+
+        /**
+         * Renames a file. May fail if "to" already exists or is on another drive.
+         */
+        renameFile: function (from, to) {
+            var toFile = xpfile(to);
+            return xpfile(from).moveTo(toFile.parent, toFile.leafName);
+        },
+
+        readFile: xpcUtil.readFile,
+
+        readFileAsync: function (path, encoding) {
+            var d = prim();
+            try {
+                d.resolve(file.readFile(path, encoding));
+            } catch (e) {
+                d.reject(e);
+            }
+            return d.promise;
+        },
+
+        saveUtf8File: function (/*String*/fileName, /*String*/fileContents) {
+            //summary: saves a file using UTF-8 encoding.
+            file.saveFile(fileName, fileContents, "utf-8");
+        },
+
+        saveFile: function (/*String*/fileName, /*String*/fileContents, /*String?*/encoding) {
+            var outStream, convertStream,
+                fileObj = xpfile(fileName);
+
+            mkFullDir(fileObj.parent);
+
+            try {
+                outStream = Cc['@mozilla.org/network/file-output-stream;1']
+                             .createInstance(Ci.nsIFileOutputStream);
+                //438 is decimal for 0777
+                outStream.init(fileObj, 0x02 | 0x08 | 0x20, 511, 0);
+
+                convertStream = Cc['@mozilla.org/intl/converter-output-stream;1']
+                                  .createInstance(Ci.nsIConverterOutputStream);
+
+                convertStream.init(outStream, encoding, 0, 0);
+                convertStream.writeString(fileContents);
+            } catch (e) {
+                throw new Error((fileObj && fileObj.path || '') + ': ' + e);
+            } finally {
+                if (convertStream) {
+                    convertStream.close();
+                }
+                if (outStream) {
+                    outStream.close();
+                }
+            }
+        },
+
+        deleteFile: function (/*String*/fileName) {
+            //summary: deletes a file or directory if it exists.
+            var fileObj = xpfile(fileName);
+            if (fileObj.exists()) {
+                fileObj.remove(true);
+            }
+        },
+
+        /**
+         * Deletes any empty directories under the given directory.
+         * The startDirIsJavaObject is private to this implementation's
+         * recursion needs.
+         */
+        deleteEmptyDirs: function (startDir, startDirIsObject) {
+            var topDir = startDir,
+                dirFileArray, fileObj;
+
+            if (!startDirIsObject) {
+                topDir = xpfile(startDir);
+            }
+
+            if (topDir.exists()) {
+                dirFileArray = topDir.directoryEntries;
+                while (dirFileArray.hasMoreElements()) {
+                    fileObj = dirFileArray.getNext().QueryInterface(Ci.nsILocalFile);
+
+                    if (fileObj.isDirectory()) {
+                        file.deleteEmptyDirs(fileObj, true);
+                    }
+                }
+
+                //If the directory is empty now, delete it.
+                dirFileArray = topDir.directoryEntries;
+                if (!dirFileArray.hasMoreElements()) {
+                    file.deleteFile(topDir.path);
+                }
+            }
+        }
+    };
+
+    return file;
+});
+
+}
+
 if(env === 'browser') {
 /*global process */
 define('browser/quit', function () {
@@ -3711,6 +4191,17 @@ define('node/quit', function () {
 if(env === 'rhino') {
 /*global quit */
 define('rhino/quit', function () {
+    'use strict';
+    return function (code) {
+        return quit(code);
+    };
+});
+
+}
+
+if(env === 'xpconnect') {
+/*global quit */
+define('xpconnect/quit', function () {
     'use strict';
     return function (code) {
         return quit(code);
@@ -3770,6 +4261,22 @@ if(env === 'rhino') {
 /*global define: false, print: false */
 
 define('rhino/print', function () {
+    return print;
+});
+
+}
+
+if(env === 'xpconnect') {
+/**
+ * @license RequireJS Copyright (c) 2013, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint strict: false */
+/*global define: false, print: false */
+
+define('xpconnect/print', function () {
     return print;
 });
 
@@ -20270,7 +20777,7 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
             }
 
             //Find the define calls and their position in the files.
-            tokens.forEach(function (token, i) {
+            tokens.some(function (token, i) {
                 var prev, prev2, next, next2, next3, next4, next5,
                     needsId, depAction, nameCommaRange, foundId,
                     sourceUrlData, range,
@@ -20291,7 +20798,7 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
                         //it.
                         lastRange = defineRanges.length &&
                             defineRanges[defineRanges.length - 1];
-                        if (lastRange) {
+                        if (lastRange && !lastRange.defineEndRange) {
                             lastRange.defineEndRange = token.range;
                         }
                     }
@@ -20325,6 +20832,12 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
                     if (!next || next.type !== 'Punctuator' ||
                             next.value !== '(') {
                        //Not a define() function call. Bail.
+                        return;
+                    }
+
+                    if (prev && prev.type === 'Keyword' &&
+                            prev.value === 'function') {
+                        //A declaration of a define function. Skip it.
                         return;
                     }
 
@@ -20470,8 +20983,11 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
                     //set for transport form.
                     if (range.needsId) {
                         if (foundAnon) {
-                            throw new Error(path +
-                                ' has two many anonymous modules in it.');
+                            logger.trace(path + ' has more than one anonymous ' +
+                                'define. May be a built file from another ' +
+                                'build system like, Ender. Skipping normalization.');
+                            defineRanges = [];
+                            return true;
                         } else {
                             foundAnon = range;
                             defineRanges.push(range);
@@ -21163,6 +21679,10 @@ define('rhino/optimize', ['logger', 'env!env/file'], function (logger, file) {
     return optimize;
 });
 }
+
+if(env === 'xpconnect') {
+define('xpconnect/optimize', {});
+}
 /**
  * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
@@ -21179,7 +21699,7 @@ function (lang,   logger,   envOptimize,        file,           parse,
     'use strict';
 
     var optimize,
-        cssImportRegExp = /\@import\s+(url\()?\s*([^);]+)\s*(\))?([\w, ]*)(;)?/g,
+        cssImportRegExp = /\@import\s+(url\()?\s*([^);]+)\s*(\))?([\w, ]*)(;)?/ig,
         cssCommentImportRegExp = /\/\*[^\*]*@import[^\*]*\*\//g,
         cssUrlRegExp = /\url\(\s*([^\)]+)\s*\)?/g;
 
@@ -22188,7 +22708,7 @@ define('commonJs', ['env!env/file', 'parse'], function (file, parse) {
  */
 
 /*jslint plusplus: true, nomen: true, regexp: true  */
-/*global define, require, requirejs */
+/*global define, requirejs */
 
 
 define('build', function (require) {
@@ -22203,8 +22723,8 @@ define('build', function (require) {
         optimize = require('optimize'),
         pragma = require('pragma'),
         transform = require('transform'),
-        load = require('env!env/load'),
         requirePatch = require('requirePatch'),
+        env = require('env'),
         quit = require('env!env/quit'),
         commonJs = require('commonJs'),
         hasProp = lang.hasProp,
@@ -22392,7 +22912,7 @@ define('build', function (require) {
         var buildPaths, fileName, fileNames,
             paths, i,
             baseConfig, config,
-            modules, builtModule, srcPath, buildContext,
+            modules, srcPath, buildContext,
             destPath, moduleMap, parentModuleMap, context,
             resources, resource, plugin, fileContents,
             pluginProcessed = {},
@@ -22400,7 +22920,7 @@ define('build', function (require) {
             pluginCollector = {};
 
         return prim().start(function () {
-            var prop, moduleName;
+            var prop;
 
             //Can now run the patches to require.js to allow it to be used for
             //build generation. Do it here instead of at the top of the module
@@ -22410,10 +22930,6 @@ define('build', function (require) {
 
             config = build.createConfig(cmdConfig);
             paths = config.paths;
-
-            if (config.logLevel) {
-                logger.logLevel(config.logLevel);
-            }
 
             //Remove the previous build dir, in case it contains source transforms,
             //like the ones done with onBuildRead and onBuildWrite.
@@ -22572,7 +23088,6 @@ define('build', function (require) {
                 //of those modules end up being one of the excluded values.
                 actions = modules.map(function (module) {
                     return function () {
-                        var actions;
                         if (module.exclude) {
                             module.excludeLayers = [];
                             return prim.serial(module.exclude.map(function (exclude, i) {
@@ -22605,12 +23120,11 @@ define('build', function (require) {
                             //get the nested dependencies for it via a matching entry
                             //in the module.excludeLayers array.
                             module.exclude.forEach(function (excludeModule, i) {
-                                var excludeLayer = module.excludeLayers[i].layer, map = excludeLayer.buildPathMap, prop;
-                                for (prop in map) {
-                                    if (hasProp(map, prop)) {
-                                        build.removeModulePath(prop, map[prop], module.layer);
-                                    }
-                                }
+                                var excludeLayer = module.excludeLayers[i].layer,
+                                    map = excludeLayer.buildFileToModule;
+                                excludeLayer.buildFilePaths.forEach(function(filePath){
+                                    build.removeModulePath(map[filePath], filePath, module.layer);
+                                });
                             });
                         }
                         if (module.excludeShallow) {
@@ -22691,7 +23205,7 @@ define('build', function (require) {
 
                 //JS optimizations.
                 fileNames = file.getFilteredFileList(config.dir, /\.js$/, true);
-                fileNames.forEach(function (fileName, i) {
+                fileNames.forEach(function (fileName) {
                     var cfg, override, moduleIndex;
 
                     //Generate the module name from the config.dir root.
@@ -22837,8 +23351,7 @@ define('build', function (require) {
      * name=value splitting has already happened.
      */
     function stringDotToObj(result, name, value) {
-        var parts = name.split('.'),
-            prop = parts[0];
+        var parts = name.split('.');
 
         parts.forEach(function (prop, i) {
             if (i === parts.length - 1) {
@@ -22861,6 +23374,7 @@ define('build', function (require) {
         has: true,
         hasOnSave: true,
         uglify: true,
+        uglify2: true,
         closure: true,
         map: true,
         throwWhen: true
@@ -23018,6 +23532,12 @@ define('build', function (require) {
                 }
             }
         }
+
+        //Set up log level since it can affect if errors are thrown
+        //or caught and passed to errbacks while doing config setup.
+        if (lang.hasProp(target, 'logLevel')) {
+            logger.logLevel(target.logLevel);
+        }
     }
 
     /**
@@ -23058,7 +23578,7 @@ define('build', function (require) {
     build.createConfig = function (cfg) {
         /*jslint evil: true */
         var config = {}, buildFileContents, buildFileConfig, mainConfig,
-            mainConfigFile, mainConfigPath, prop, buildFile, absFilePath;
+            mainConfigFile, mainConfigPath, buildFile, absFilePath;
 
         //Make sure all paths are relative to current directory.
         absFilePath = file.absPath('.');
@@ -23067,6 +23587,12 @@ define('build', function (require) {
 
         lang.mixin(config, buildBaseConfig);
         lang.mixin(config, cfg, true);
+
+        //Set up log level early since it can affect if errors are thrown
+        //or caught and passed to errbacks, even while constructing config.
+        if (lang.hasProp(config, 'logLevel')) {
+            logger.logLevel(config.logLevel);
+        }
 
         if (config.buildFile) {
             //A build file exists, load it to get more config.
@@ -23204,6 +23730,11 @@ define('build', function (require) {
                             ' Use "out" if you are targeting a single file for' +
                             ' for optimization, and "dir" if you want the appDir' +
                             ' or baseUrl directories optimized.');
+        }
+        if (config.dir && config.appDir && config.dir === config.appDir) {
+            throw new Error('"dir" and "appDir" set to the same directory.' +
+                            ' This could result in the deletion of appDir.' +
+                            ' Stopping.');
         }
 
         if (config.insertRequire && !lang.isArray(config.insertRequire)) {
@@ -23400,14 +23931,12 @@ define('build', function (require) {
      */
     build.traceDependencies = function (module, config) {
         var include, override, layer, context, baseConfig, oldContext,
-            registry, id, idParts, pluginId, mod, errUrl, rawTextByIds,
-            errMessage = '',
-            failedPluginMap = {},
-            failedPluginIds = [],
-            errIds = [],
-            errUrlMap = {},
-            errUrlConflicts = {},
-            hasErrUrl = false,
+            rawTextByIds,
+            syncChecks = {
+                rhino: true,
+                node: true,
+                xpconnect: true
+            },
             deferred = prim();
 
         //Reset some state set up in requirePatch.js, and clean up require's
@@ -23455,75 +23984,100 @@ define('build', function (require) {
         deferred.reject.__requireJsBuild = true;
         require(include, deferred.resolve, deferred.reject);
 
-        return deferred.promise.then(function () {
-            var id, prop;
+        //If a sync build environment, check for errors here, instead of
+        //in the then callback below, since some errors, like two IDs pointed
+        //to same URL but only one anon ID will leave the loader in an
+        //unresolved state since a setTimeout cannot be used to check for
+        //timeout.
+        if (syncChecks[env.get()]) {
+            try {
+                build.checkForErrors(context);
+            } catch (e) {
+                deferred.reject(e);
+            }
+        }
 
+        return deferred.promise.then(function () {
             //Reset config
             if (module.override) {
                 require(baseConfig);
             }
 
-            //Check to see if it all loaded. If not, then stop, and give
-            //a message on what is left.
-            registry = context.registry;
-            for (id in registry) {
-                if (hasProp(registry, id) && id.indexOf('_@r') !== 0) {
-                    mod = getOwn(registry, id);
-                    if (id.indexOf('_unnormalized') === -1 && mod && mod.enabled) {
-                        errIds.push(id);
-                        errUrl = mod.map.url;
-
-                        if (errUrlMap[errUrl]) {
-                            hasErrUrl = true;
-                            //This error module has the same URL as another
-                            //error module, could be misconfiguration.
-                            if (!errUrlConflicts[errUrl]) {
-                                errUrlConflicts[errUrl] = [];
-                                //Store the original module that had the same URL.
-                                errUrlConflicts[errUrl].push(errUrlMap[errUrl]);
-                            }
-                            errUrlConflicts[errUrl].push(id);
-                        } else {
-                            errUrlMap[errUrl] = id;
-                        }
-                    }
-
-                    //Look for plugins that did not call load()
-                    idParts = id.split('!');
-                    pluginId = idParts[0];
-                    if (idParts.length > 1 && falseProp(failedPluginMap, pluginId)) {
-                        failedPluginIds.push(pluginId);
-                        failedPluginMap[pluginId] = true;
-                    }
-                }
-            }
-
-            if (errIds.length || failedPluginIds.length) {
-                if (failedPluginIds.length) {
-                    errMessage += 'Loader plugin' +
-                        (failedPluginIds.length === 1 ? '' : 's') +
-                        ' did not call ' +
-                        'the load callback in the build: ' +
-                        failedPluginIds.join(', ') + '\n';
-                }
-                errMessage += 'Module loading did not complete for: ' + errIds.join(', ');
-
-                if (hasErrUrl) {
-                    errMessage += '\nThe following modules share the same URL. This ' +
-                                  'could be a misconfiguration if that URL only has ' +
-                                  'one anonymous module in it:';
-                    for (prop in errUrlConflicts) {
-                        if (hasProp(errUrlConflicts, prop)) {
-                            errMessage += '\n' + prop + ': ' +
-                                          errUrlConflicts[prop].join(', ');
-                        }
-                    }
-                }
-                throw new Error(errMessage);
-            }
+            build.checkForErrors(context);
 
             return layer;
         });
+    };
+
+    build.checkForErrors = function (context) {
+        //Check to see if it all loaded. If not, then throw, and give
+        //a message on what is left.
+        var id, prop, mod, errUrl, idParts, pluginId,
+            errMessage = '',
+            failedPluginMap = {},
+            failedPluginIds = [],
+            errIds = [],
+            errUrlMap = {},
+            errUrlConflicts = {},
+            hasErrUrl = false,
+            registry = context.registry;
+
+        for (id in registry) {
+            if (hasProp(registry, id) && id.indexOf('_@r') !== 0) {
+                mod = getOwn(registry, id);
+                if (id.indexOf('_unnormalized') === -1 && mod && mod.enabled) {
+                    errIds.push(id);
+                    errUrl = mod.map.url;
+
+                    if (errUrlMap[errUrl]) {
+                        hasErrUrl = true;
+                        //This error module has the same URL as another
+                        //error module, could be misconfiguration.
+                        if (!errUrlConflicts[errUrl]) {
+                            errUrlConflicts[errUrl] = [];
+                            //Store the original module that had the same URL.
+                            errUrlConflicts[errUrl].push(errUrlMap[errUrl]);
+                        }
+                        errUrlConflicts[errUrl].push(id);
+                    } else {
+                        errUrlMap[errUrl] = id;
+                    }
+                }
+
+                //Look for plugins that did not call load()
+                idParts = id.split('!');
+                pluginId = idParts[0];
+                if (idParts.length > 1 && falseProp(failedPluginMap, pluginId)) {
+                    failedPluginIds.push(pluginId);
+                    failedPluginMap[pluginId] = true;
+                }
+            }
+        }
+
+        if (errIds.length || failedPluginIds.length) {
+            if (failedPluginIds.length) {
+                errMessage += 'Loader plugin' +
+                    (failedPluginIds.length === 1 ? '' : 's') +
+                    ' did not call ' +
+                    'the load callback in the build: ' +
+                    failedPluginIds.join(', ') + '\n';
+            }
+            errMessage += 'Module loading did not complete for: ' + errIds.join(', ');
+
+            if (hasErrUrl) {
+                errMessage += '\nThe following modules share the same URL. This ' +
+                              'could be a misconfiguration if that URL only has ' +
+                              'one anonymous module in it:';
+                for (prop in errUrlConflicts) {
+                    if (hasProp(errUrlConflicts, prop)) {
+                        errMessage += '\n' + prop + ': ' +
+                                      errUrlConflicts[prop].join(', ');
+                    }
+                }
+            }
+            throw new Error(errMessage);
+        }
+
     };
 
     build.createOverrideConfig = function (config, override) {
@@ -23563,11 +24117,10 @@ define('build', function (require) {
             buildFileContents = '';
 
         return prim().start(function () {
-            var path, reqIndex, currContents,
-                i, moduleName, shim, packageConfig, nonPackageName,
-                parts, builder, writeApi, tempPragmas,
+            var reqIndex, currContents,
+                moduleName, shim, packageConfig, nonPackageName,
+                parts, builder, writeApi,
                 namespace, namespaceWithDot, stubModulesByName,
-                newConfig = {},
                 context = layer.context,
                 onLayerEnds = [],
                 onLayerEndAdded = {};
@@ -23836,6 +24389,11 @@ define('build', function (require) {
                         requirejs._cacheReset();
                     }
 
+                    // Ensure errors get propagated to the errback
+                    if (result instanceof Error) {
+                      throw result;
+                    }
+
                     return result;
                 }
 
@@ -23884,6 +24442,15 @@ define('build', function (require) {
     } else if (env === 'browser') {
         //Only option is to use the API.
         setBaseUrl(location.href);
+        createRjsApi();
+        return;
+    } else if ((env === 'rhino' || env === 'xpconnect') &&
+            //User sets up requirejsAsLib variable to indicate it is loaded
+            //via load() to be used as a library.
+            typeof requirejsAsLib !== 'undefined' && requirejsAsLib) {
+        //This script is loaded via rhino's load() method, expose the
+        //API and get out.
+        setBaseUrl(fileName);
         createRjsApi();
         return;
     }
@@ -23957,5 +24524,7 @@ function (args,            build) {
     }
 
 }((typeof console !== 'undefined' ? console : undefined),
-    (typeof Packages !== 'undefined' ? Array.prototype.slice.call(arguments, 0) : []),
+    (typeof Packages !== 'undefined' || (typeof window === 'undefined' &&
+        typeof Components !== 'undefined' && Components.interfaces) ?
+        Array.prototype.slice.call(arguments, 0) : []),
     (typeof readFile !== 'undefined' ? readFile : undefined)));
