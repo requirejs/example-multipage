@@ -21,7 +21,7 @@
         },
 
         //Now set up a build layer for each page, but exclude
-        //the common one. "exclude" will exclude nested
+        //the common one. "exclude" will exclude
         //the nested, built dependencies from "common". Any
         //"exclude" that includes built modules should be
         //listed before the build layer that wants to exclude it.
