@@ -1,9 +1,6 @@
 {
     appDir: '../www',
-    baseUrl: 'js/lib',
-    paths: {
-        app: '../app'
-    },
+    mainConfigFile: '../www/js/common.js',
     dir: '../www-built',
     modules: [
         //First set up the common build layer.
