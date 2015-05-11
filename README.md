@@ -63,12 +63,12 @@ As you do builds and see in the build output that each page is including the
 same module, add it to common's "include" array in **tools/build.js**.
 
 It is better to add these common modules to the **tools/build.js** config
-instead of doing a require([]) call for them in **js/common.js**. Modules that
+instead of doing a requirejs([]) call for them in **js/common.js**. Modules that
 are not explicitly required at runtime are not executed when added to common.js
 via the include build option. So by using **tools/build.js**, you can include
 common modules that may be in 2-3 pages but not all pages. For pages that do
 not need a particular common module, it will not be executed. If you put in a
-require() call for it in **js/common.js**, then it will always be executed.
+requirejs() call for it in **js/common.js**, then it will always be executed.
 
 ## More info
 

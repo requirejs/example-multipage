@@ -27,7 +27,7 @@
         //listed before the build layer that wants to exclude it.
         //"include" the appropriate "app/main*" module since by default
         //it will not get added to the build since it is loaded by a nested
-        //require in the page*.js files.
+        //requirejs in the page*.js files.
         {
             //module names are relative to baseUrl/paths config
             name: '../page1',
