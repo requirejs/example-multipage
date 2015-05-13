@@ -1,4 +1,4 @@
 //Load common code that includes config, then load the app logic for this page.
-require(['./common'], function (common) {
-    require(['app/main2']);
+requirejs(['./common'], function (common) {
+    requirejs(['app/main2']);
 });
