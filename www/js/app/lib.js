@@ -1,7 +1,9 @@
-define(['jquery'], function ($) {
-    return {
-        getBody: function () {
-            return $('body');
-        }
-    }
+define(function(){
+    return function ($) {
+        return {
+            getBody: function () {
+                return $('body');
+            }
+        };
+    };
 });

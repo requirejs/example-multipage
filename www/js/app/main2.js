@@ -1,6 +1,6 @@
 define(function (require) {
     var $ = require('jquery'),
-        lib = require('./lib'),
+        lib = require('./lib')($),
         controller = require('./controller/c2'),
         model = require('./model/m2');
 
