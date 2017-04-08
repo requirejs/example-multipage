@@ -36,6 +36,11 @@
             //module names are relative to baseUrl
             name: '../page2',
             include: ['app/main2'],
+            exclude: ['../common', 'app/components/footer/app']
+        },
+
+        {
+            name: '../app/components/footer/app',
             exclude: ['../common']
         }
 
